@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>模型技能分析システム - Academic Edition</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+  <style>
+    body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #f8f9fa; text-align: center; margin: 0; padding-bottom: 120px; }
+    .container { display: flex; justify-content: center; gap: 20px; padding: 20px; flex-wrap: wrap; }
+    .box { background: white; padding: 15px; border-radius: 15px; width: 340px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); border: 1px solid #ddd; }
+    .video-wrap { position: relative; width: 320px; height: 240px; background: #000; border-radius: 10px; overflow: hidden; }
+    video { display: none; } 
+    canvas { position: absolute; top: 0; left: 0; width: 320px; height: 240px; }
+    .status { background: #f1f3f4; padding: 10px; border-radius: 8px; font-size: 13px; margin-top: 10px; text-align: left; line-height: 1.4; }
+    .controls { background: rgba(255,255,255,0.9); padding: 20px; position: fixed; bottom: 0; width: 100%; border-top: 1px solid #ddd; backdrop-filter: blur(5px); }
+    button { padding: 12px 40px; font-size: 16px; border-radius: 30px; border: none; cursor: pointer; font-weight: bold; transition: 0.3s; }
+    #startBtn { background: #1a73e8; color: white; }
+    #startBtn:disabled { background: #ccc; }
+    #stopBtn { background: #ea4335; color: white; margin-left: 10px; }
+    #hGraph { width: 100%; height: 60px; background: #fff; border: 1px solid #eee; margin-top: 10px; }
+    .label-tag { font-weight: bold; color: #555; }
+  </style>
+</head>
+<body>
+
+<h2 style="margin-top:20px;">模型製作 技能分析システム (TDS-DMA 簡易版)</h2>
+<p id="msg">AIモデル読み込み中...</p>
+
+<div class="container">
+  <div class="box">
+    <h3 style="color:#1a73e8;">① 視線解析 (Gaze)</h3>
+    <select id="sel1" style="width:100%; margin-bottom:10px;"></select>
+    <div class="video-wrap">
+      <video id="v1" autoplay playsinline muted></video>
+      <canvas id="c1" width="320" height="240"></canvas>
+    </div>
+    <div class="status">
+      視線方向: <span id="res1" style="color:blue; font-weight:bold;">-</span><br>
+      中心座標: <span id="gCoord">-</span>
+    </div>
+  </div>
+
+  <div class="box">
+    <h3 style="color:#ea4335;">② 手元解析 (Motion)</h3>
+    <select id="sel2" style="width:100%; margin-bottom:10px;"></select>
+    <div class="video-wrap">
+      <video id="v2" autoplay playsinline muted></video>
+      <canvas id="c2" width="320" height="240"></canvas>
+    </div>
+    <div class="status">
+      右手: <span id="rStatus">-</span><br>
+      左手: <span id="lStatus">-</span><br>
+      手眼距離: <span id="distStatus">-</span>
+    </div>
+    <canvas id="hGraph" width="320" height="60"></canvas>
+  </div>
+</div>
+
+<div class="controls">
+  <button id="startBtn" disabled>記録開始 (Record)</button>
+  <button id="stopBtn" disabled>CSV保存して終了</button>
+</div>
+
+<script type="module">
+  import { FaceLandmarker, HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
+
+  let faceLM, handLM;
+  let isRec = false;
+  // CSVヘッダー: マツダ論文を参考に項目を拡充
+  let dataLog = [["Timestamp", "Gaze_Dir", "Gaze_X", "Gaze_Y", "R_Hand_X", "R_Hand_Y", "R_Hand_Z", "L_Hand_X", "L_Hand_Y", "L_Hand_Z", "Eye_Hand_Dist"]];
+  
+  let curIris = {x:0, y:0}, curR = {x:0, y:0, z:0}, curL = {x:0, y:0, z:0}, curGDir = "-";
+  let distHist = new Array(50).fill(0);
+
+  const v1 = document.getElementById("v1"), v2 = document.getElementById("v2");
+  const ctx1 = document.getElementById("c1").getContext("2d");
+  const ctx2 = document.getElementById("c2").getContext("2d");
+  const gCtx = document.getElementById("hGraph").getContext("2d");
+
+  async function setup() {
+    try {
+      const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
+      faceLM = await FaceLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task" },
+        runningMode: "VIDEO", numFaces: 1
+      });
+      handLM = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task" },
+        runningMode: "VIDEO", numHands: 2
+      });
+
+      const vids = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+      const s1 = document.getElementById("sel1"), s2 = document.getElementById("sel2");
+      vids.forEach((v, i) => { 
+        s1.add(new Option(v.label || `Cam ${i+1}`, v.deviceId)); 
+        s2.add(new Option(v.label || `Cam ${i+1}`, v.deviceId)); 
+      });
+      if(vids.length > 1) s2.selectedIndex = 1;
+
+      document.getElementById("startBtn").disabled = false;
+      document.getElementById("msg").innerText = "システム準備完了";
+    } catch (e) {
+      document.getElementById("msg").innerText = "エラー: AIモデルをロードできません。";
+    }
+  }
+
+  document.getElementById("startBtn").onclick = async () => {
+    await startCam(v1, document.getElementById("sel1").value);
+    await startCam(v2, document.getElementById("sel2").value);
+    isRec = true;
+    document.getElementById("startBtn").disabled = true;
+    document.getElementById("stopBtn").disabled = false;
+    render();
+  };
+
+  async function startCam(vEl, id) {
+    if(vEl.srcObject) vEl.srcObject.getTracks().forEach(t => t.stop());
+    vEl.srcObject = await navigator.mediaDevices.getUserMedia({ video: { deviceId: id ? {exact:id} : undefined, width: 320, height: 240 } });
+  }
+
+  function render() {
+    if(!isRec) return;
+    const now = performance.now();
+
+    // ① 視線解析
+    if(v1.readyState >= 2) {
+      ctx1.drawImage(v1, 0, 0, 320, 240);
+      const res = faceLM.detectForVideo(v1, now);
+      if(res.faceLandmarks && res.faceLandmarks.length > 0) {
+        curIris = res.faceLandmarks[0][468]; // 虹彩の中心
+        curGDir = (curIris.y < 0.43) ? "Up" : (curIris.x < 0.48) ? "Right" : (curIris.x > 0.52) ? "Left" : "Center";
+        document.getElementById("res1").innerText = curGDir;
+        document.getElementById("gCoord").innerText = `${curIris.x.toFixed(2)}, ${curIris.y.toFixed(2)}`;
+      }
+    }
+
+    // ② 手元解析
+    if(v2.readyState >= 2) {
+      ctx2.drawImage(v2, 0, 0, 320, 240);
+      const res = handLM.detectForVideo(v2, now);
+      
+      // 毎フレームリセット（検知されなかった場合のため）
+      curR = {x:null, y:null, z:null};
+      curL = {x:null, y:null, z:null};
+
+      if(res.landmarks && res.landmarks.length > 0) {
+        res.landmarks.forEach((landmarks, idx) => {
+          const label = res.handedness[idx][0].categoryName; // 'Left' or 'Right'
+          const p = landmarks[9]; // 中指の付け根(MCP)を基準点とする（マツダ論文の重心に近い位置）
+
+          if(label === 'Right' || (res.landmarks.length === 1 && label === 'Left')) { // 1本のみの場合の暫定
+             curR = {x:p.x, y:p.y, z:p.z};
+             document.getElementById("rStatus").innerText = `X:${p.x.toFixed(2)} Y:${p.y.toFixed(2)}`;
+          } else {
+             curL = {x:p.x, y:p.y, z:p.z};
+             document.getElementById("lStatus").innerText = `X:${p.x.toFixed(2)} Y:${p.y.toFixed(2)}`;
+          }
+          window.drawConnectors(ctx2, landmarks, HandLandmarker.HAND_CONNECTIONS, {color: label==='Right'?'#00FF00':'#FF00FF', lineWidth: 2});
+        });
+
+        // 手眼協調性（視線と右手の距離）の計算
+        if(curR.x !== null) {
+          const d = Math.sqrt(Math.pow(curIris.x - curR.x, 2) + Math.pow(curIris.y - curR.y, 2));
+          document.getElementById("distStatus").innerText = d.toFixed(3);
+          distHist.push(d); distHist.shift();
+          drawGraph();
+          
+          // 記録（マツダ論文の「技能の見える化」用に詳細にログ）
+          dataLog.push([
+            new Date().toISOString(), curGDir, curIris.x.toFixed(4), curIris.y.toFixed(4),
+            curR.x.toFixed(4), curR.y.toFixed(4), curR.z.toFixed(4),
+            curL.x ? curL.x.toFixed(4) : "", curL.y ? curL.y.toFixed(4) : "", curL.z ? curL.z.toFixed(4) : "",
+            d.toFixed(4)
+          ]);
+        }
+      }
+    }
+    requestAnimationFrame(render);
+  }
+
+  function drawGraph() {
+    gCtx.clearRect(0, 0, 320, 60);
+    gCtx.strokeStyle = "#1a73e8";
+    gCtx.lineWidth = 2;
+    gCtx.beginPath();
+    distHist.forEach((v, i) => {
+      const x = (320 / 50) * i, y = 60 - (v * 100); // 距離を可視化用に増幅
+      if(i === 0) gCtx.moveTo(x, y); else gCtx.lineTo(x, y);
+    });
+    gCtx.stroke();
+  }
+
+  document.getElementById("stopBtn").onclick = () => {
+    isRec = false;
+    const csv = "\ufeff" + dataLog.map(e => e.join(",")).join("\n");
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
+    link.download = `skill_analysis_${Date.now()}.csv`;
+    link.click();
+    setTimeout(() => location.reload(), 500);
+  };
+
+  setup();
+</script>
+</body>
+</html>
