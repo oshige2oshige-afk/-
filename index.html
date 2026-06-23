@@ -1,3 +1,66 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>模型技能分析システム - Academic Edition</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+  <style>
+    body { font-family: sans-serif; background: #f8f9fa; text-align: center; margin: 0; padding-bottom: 120px; }
+    .container { display: flex; justify-content: center; gap: 20px; padding: 20px; flex-wrap: wrap; }
+    .box { background: white; padding: 15px; border-radius: 15px; width: 340px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); border: 1px solid #ddd; }
+    .video-wrap { position: relative; width: 320px; height: 240px; background: #000; border-radius: 10px; overflow: hidden; }
+    video { display: none; } 
+    canvas { position: absolute; top: 0; left: 0; width: 320px; height: 240px; }
+    .status { background: #f1f3f4; padding: 10px; border-radius: 8px; font-size: 13px; margin-top: 10px; text-align: left; line-height: 1.4; min-height: 50px; }
+    .controls { background: rgba(255,255,255,0.9); padding: 20px; position: fixed; bottom: 0; width: 100%; border-top: 1px solid #ddd; z-index: 1000; }
+    button { padding: 12px 40px; font-size: 16px; border-radius: 30px; border: none; cursor: pointer; font-weight: bold; }
+    #startBtn { background: #1a73e8; color: white; }
+    #startBtn:disabled { background: #ccc; }
+    #stopBtn { background: #ea4335; color: white; margin-left: 10px; }
+    #hGraph { width: 100%; height: 60px; background: #fff; border: 1px solid #eee; margin-top: 10px; }
+  </style>
+</head>
+<body>
+
+<h2 style="margin-top:20px;">模型製作 技能分析システム</h2>
+<p id="msg">AIモデル読み込み中...</p>
+
+<div class="container">
+  <div class="box">
+    <h3 style="color:#1a73e8;">① 視線解析 (Gaze)</h3>
+    <select id="sel1" style="width:100%; margin-bottom:10px;"></select>
+    <div class="video-wrap">
+      <video id="v1" autoplay playsinline muted></video>
+      <canvas id="c1" width="320" height="240"></canvas>
+    </div>
+    <div class="status">
+      視線方向: <span id="res1" style="color:blue; font-weight:bold;">-</span><br>
+      中心座標: <span id="gCoord">-</span>
+    </div>
+  </div>
+
+  <div class="box">
+    <h3 style="color:#ea4335;">② 手元解析 (Motion)</h3>
+    <select id="sel2" style="width:100%; margin-bottom:10px;"></select>
+    <div class="video-wrap">
+      <video id="v2" autoplay playsinline muted></video>
+      <canvas id="c2" width="320" height="240"></canvas>
+    </div>
+    <div class="status">
+      右手: <span id="rStatus">-</span><br>
+      左手: <span id="lStatus">-</span><br>
+      手眼距離: <span id="distStatus">-</span>
+    </div>
+    <canvas id="hGraph" width="320" height="60"></canvas>
+  </div>
+</div>
+
+<div class="controls">
+  <button id="startBtn" disabled>記録開始 (Record)</button>
+  <button id="stopBtn" disabled>CSV保存して終了</button>
+</div>
+
 <script type="module">
   import { FaceLandmarker, HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
 
@@ -25,7 +88,8 @@
         runningMode: "VIDEO", numHands: 2
       });
 
-      const vids = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const vids = devices.filter(d => d.kind === 'videoinput');
       const s1 = document.getElementById("sel1"), s2 = document.getElementById("sel2");
       vids.forEach((v, i) => { 
         const name = v.label || `Camera ${i+1}`;
@@ -37,7 +101,7 @@
       document.getElementById("startBtn").disabled = false;
       document.getElementById("msg").innerText = "システム準備完了";
     } catch (e) {
-      document.getElementById("msg").innerText = "起動エラー: " + e.message;
+      document.getElementById("msg").innerText = "エラー: " + e.message;
     }
   }
 
@@ -46,10 +110,7 @@
     const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: id ? {exact:id} : undefined, width: 320, height: 240 } });
     vEl.srcObject = stream;
     return new Promise((resolve) => {
-      vEl.onloadedmetadata = () => {
-        vEl.play();
-        resolve();
-      };
+      vEl.onloadedmetadata = () => { vEl.play(); resolve(); };
     });
   }
 
@@ -64,7 +125,7 @@
       document.getElementById("msg").innerText = "分析中...";
       render();
     } catch (e) {
-      alert("カメラの起動に失敗しました。");
+      alert("カメラ起動失敗: " + e.message);
       document.getElementById("startBtn").disabled = false;
     }
   };
@@ -73,52 +134,52 @@
     if(!isRec) return;
     const now = performance.now();
 
-    // ① 視線解析
-    if(v1.readyState >= 2 && v1.videoWidth > 0) {
-      ctx1.drawImage(v1, 0, 0, 320, 240);
-      const res = faceLM.detectForVideo(v1, now);
-      if(res.faceLandmarks && res.faceLandmarks.length > 0) {
-        curIris = res.faceLandmarks[0][468]; 
-        curGDir = (curIris.y < 0.43) ? "Up" : (curIris.x < 0.48) ? "Right" : (curIris.x > 0.52) ? "Left" : "Center";
-        document.getElementById("res1").innerText = curGDir;
-      }
-    }
-
-    // ② 手元解析
-    if(v2.readyState >= 2 && v2.videoWidth > 0) {
-      ctx2.drawImage(v2, 0, 0, 320, 240);
-      const res = handLM.detectForVideo(v2, now);
-      curR = {x:null, y:null, z:null}; curL = {x:null, y:null, z:null};
-
-      if(res.landmarks && res.landmarks.length > 0) {
-        res.landmarks.forEach((landmarks, idx) => {
-          // 安全なラベル取得（エラー回避）
-          let label = "Unknown";
-          if (res.handedness && res.handedness[idx] && res.handedness[idx][0]) {
-            label = res.handedness[idx][0].categoryName;
-          }
-
-          const p = landmarks[9];
-          // 右手として判定、または手が1つのみの場合は暫定的に右として扱う
-          if(label === 'Right' || (res.landmarks.length === 1 && label !== 'Left')) {
-             curR = {x:p.x, y:p.y, z:p.z};
-             document.getElementById("rStatus").innerText = `X:${p.x.toFixed(2)} Y:${p.y.toFixed(2)}`;
-          } else {
-             curL = {x:p.x, y:p.y, z:p.z};
-             document.getElementById("lStatus").innerText = `X:${p.x.toFixed(2)} Y:${p.y.toFixed(2)}`;
-          }
-          window.drawConnectors(ctx2, landmarks, HandLandmarker.HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 2});
-        });
-
-        if(curR.x !== null) {
-          const d = Math.sqrt(Math.pow(curIris.x - curR.x, 2) + Math.pow(curIris.y - curR.y, 2));
-          document.getElementById("distStatus").innerText = d.toFixed(3);
-          distHist.push(d); distHist.shift();
-          drawGraph();
-          dataLog.push([new Date().toISOString(), curGDir, curIris.x.toFixed(4), curIris.y.toFixed(4), curR.x.toFixed(4), curR.y.toFixed(4), curR.z.toFixed(4), curL.x||"", curL.y||"", curL.z||"", d.toFixed(4)]);
+    try {
+      // ① 視線
+      if(v1.readyState >= 2 && v1.videoWidth > 0) {
+        ctx1.drawImage(v1, 0, 0, 320, 240);
+        const resF = faceLM.detectForVideo(v1, now);
+        if(resF.faceLandmarks && resF.faceLandmarks.length > 0) {
+          curIris = resF.faceLandmarks[0][468]; 
+          curGDir = (curIris.y < 0.43) ? "Up" : (curIris.x < 0.48) ? "Right" : (curIris.x > 0.52) ? "Left" : "Center";
+          document.getElementById("res1").innerText = curGDir;
+          document.getElementById("gCoord").innerText = `${curIris.x.toFixed(2)}, ${curIris.y.toFixed(2)}`;
         }
       }
-    }
+
+      // ② 手元
+      if(v2.readyState >= 2 && v2.videoWidth > 0) {
+        ctx2.drawImage(v2, 0, 0, 320, 240);
+        const resH = handLM.detectForVideo(v2, now);
+        curR = {x:null, y:null, z:null}; curL = {x:null, y:null, z:null};
+
+        if(resH.landmarks && resH.landmarks.length > 0) {
+          for (let i = 0; i < resH.landmarks.length; i++) {
+            const landmarks = resH.landmarks[i];
+            let label = "Right";
+            if (resH.handedness && resH.handedness[i]) {
+                label = resH.handedness[i][0].categoryName;
+            }
+            const p = landmarks[9];
+            if(label === 'Right' || resH.landmarks.length === 1) {
+               curR = {x:p.x, y:p.y, z:p.z};
+               document.getElementById("rStatus").innerText = `X:${p.x.toFixed(2)} Y:${p.y.toFixed(2)}`;
+            } else {
+               curL = {x:p.x, y:p.y, z:p.z};
+               document.getElementById("lStatus").innerText = `X:${p.x.toFixed(2)} Y:${p.y.toFixed(2)}`;
+            }
+            window.drawConnectors(ctx2, landmarks, HandLandmarker.HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 2});
+          }
+          if(curR.x !== null) {
+            const d = Math.sqrt(Math.pow(curIris.x - curR.x, 2) + Math.pow(curIris.y - curR.y, 2));
+            document.getElementById("distStatus").innerText = d.toFixed(3);
+            distHist.push(d); distHist.shift();
+            drawGraph();
+            dataLog.push([new Date().toISOString(), curGDir, curIris.x.toFixed(4), curIris.y.toFixed(4), curR.x.toFixed(4), curR.y.toFixed(4), curR.z.toFixed(4), curL.x||"", curL.y||"", curL.z||"", d.toFixed(4)]);
+          }
+        }
+      }
+    } catch (e) { console.error("分析エラー:", e); }
     requestAnimationFrame(render);
   }
 
@@ -146,3 +207,5 @@
 
   setup();
 </script>
+</body>
+</html>
