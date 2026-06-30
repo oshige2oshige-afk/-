@@ -2,57 +2,53 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <title>模型技能分析システム - Academic Edition</title>
+  <title>レゴ技能習得分析システム - TDS-DMA 簡易版</title>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
   <style>
-    body { font-family: sans-serif; background: #f8f9fa; text-align: center; margin: 0; padding-bottom: 120px; }
+    body { font-family: sans-serif; background: #f0f2f5; text-align: center; margin: 0; padding-bottom: 120px; }
     .container { display: flex; justify-content: center; gap: 20px; padding: 20px; flex-wrap: wrap; }
     .box { background: white; padding: 15px; border-radius: 15px; width: 340px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); border: 1px solid #ddd; }
     .video-wrap { position: relative; width: 320px; height: 240px; background: #000; border-radius: 10px; overflow: hidden; }
     video { display: none; } 
     canvas { position: absolute; top: 0; left: 0; width: 320px; height: 240px; }
-    .status { background: #f1f3f4; padding: 10px; border-radius: 8px; font-size: 13px; margin-top: 10px; text-align: left; line-height: 1.4; min-height: 50px; }
+    .status { background: #f1f3f4; padding: 10px; border-radius: 8px; font-size: 13px; margin-top: 10px; text-align: left; min-height: 60px; line-height: 1.4; }
     .controls { background: rgba(255,255,255,0.9); padding: 20px; position: fixed; bottom: 0; width: 100%; border-top: 1px solid #ddd; z-index: 1000; }
     button { padding: 12px 40px; font-size: 16px; border-radius: 30px; border: none; cursor: pointer; font-weight: bold; }
     #startBtn { background: #1a73e8; color: white; }
-    #startBtn:disabled { background: #ccc; }
     #stopBtn { background: #ea4335; color: white; margin-left: 10px; }
-    #hGraph { width: 100%; height: 60px; background: #fff; border: 1px solid #eee; margin-top: 10px; }
   </style>
 </head>
 <body>
 
-<h2 style="margin-top:20px;">模型製作 技能分析システム</h2>
+<h2 style="margin-top:20px;">レゴ組立 技能習得プロセス分析</h2>
 <p id="msg">AIモデル読み込み中...</p>
 
 <div class="container">
   <div class="box">
-    <h3 style="color:#1a73e8;">① 視線解析 (Gaze)</h3>
+    <h3 style="color:#1a73e8;">① 視線解析 (正面)</h3>
     <select id="sel1" style="width:100%; margin-bottom:10px;"></select>
     <div class="video-wrap">
       <video id="v1" autoplay playsinline muted></video>
       <canvas id="c1" width="320" height="240"></canvas>
     </div>
     <div class="status">
-      視線方向: <span id="res1" style="color:blue; font-weight:bold;">-</span><br>
-      中心座標: <span id="gCoord">-</span>
+      判定: <span id="res1" style="color:blue; font-weight:bold;">-</span><br>
+      詳細: <span id="gCoord">-</span>
     </div>
   </div>
 
   <div class="box">
-    <h3 style="color:#ea4335;">② 手元解析 (Motion)</h3>
+    <h3 style="color:#ea4335;">② 手元解析 (俯瞰)</h3>
     <select id="sel2" style="width:100%; margin-bottom:10px;"></select>
     <div class="video-wrap">
       <video id="v2" autoplay playsinline muted></video>
       <canvas id="c2" width="320" height="240"></canvas>
     </div>
     <div class="status">
-      右手: <span id="rStatus">-</span><br>
-      左手: <span id="lStatus">-</span><br>
+      右手中心: <span id="rStatus">-</span><br>
       手眼距離: <span id="distStatus">-</span>
     </div>
-    <canvas id="hGraph" width="320" height="60"></canvas>
   </div>
 </div>
 
@@ -66,15 +62,14 @@
 
   let faceLM, handLM;
   let isRec = false;
-  let dataLog = [["Timestamp", "Gaze_Dir", "Gaze_X", "Gaze_Y", "R_Hand_X", "R_Hand_Y", "R_Hand_Z", "L_Hand_X", "L_Hand_Y", "L_Hand_Z", "Eye_Hand_Dist"]];
+  let dataLog = [["Timestamp", "Gaze_Dir", "Iris_PD_Pix", "Iris_X", "Iris_Y", "R_Hand_X", "R_Hand_Y", "Eye_Hand_Dist"]];
   
-  let curIris = {x:0.5, y:0.5}, curR = {x:null, y:null, z:null}, curL = {x:null, y:null, z:null}, curGDir = "-";
-  let distHist = new Array(50).fill(0);
+  let curIris = {x:0.5, y:0.5}, curR = {x:null, y:null}, curGDir = "-", irisDist = 0;
+  const PD_TARGET = 6.3; // 6.3cm
 
   const v1 = document.getElementById("v1"), v2 = document.getElementById("v2");
   const ctx1 = document.getElementById("c1").getContext("2d");
   const ctx2 = document.getElementById("c2").getContext("2d");
-  const gCtx = document.getElementById("hGraph").getContext("2d");
 
   async function setup() {
     try {
@@ -88,111 +83,79 @@
         runningMode: "VIDEO", numHands: 2
       });
 
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const vids = devices.filter(d => d.kind === 'videoinput');
+      const vids = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
       const s1 = document.getElementById("sel1"), s2 = document.getElementById("sel2");
       vids.forEach((v, i) => { 
-        const name = v.label || `Camera ${i+1}`;
-        s1.add(new Option(name, v.deviceId)); 
-        s2.add(new Option(name, v.deviceId)); 
+        s1.add(new Option(v.label || `Camera ${i+1}`, v.deviceId)); 
+        s2.add(new Option(v.label || `Camera ${i+1}`, v.deviceId)); 
       });
       if(vids.length > 1) s2.selectedIndex = 1;
 
       document.getElementById("startBtn").disabled = false;
       document.getElementById("msg").innerText = "システム準備完了";
-    } catch (e) {
-      document.getElementById("msg").innerText = "エラー: " + e.message;
-    }
+    } catch (e) { document.getElementById("msg").innerText = "AI読込エラー"; }
   }
 
   async function startCam(vEl, id) {
     if(vEl.srcObject) vEl.srcObject.getTracks().forEach(t => t.stop());
     const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: id ? {exact:id} : undefined, width: 320, height: 240 } });
     vEl.srcObject = stream;
-    return new Promise((resolve) => {
-      vEl.onloadedmetadata = () => { vEl.play(); resolve(); };
-    });
+    return new Promise((resolve) => { vEl.onloadedmetadata = () => { vEl.play(); resolve(); }; });
   }
 
   document.getElementById("startBtn").onclick = async () => {
-    try {
-      document.getElementById("startBtn").disabled = true;
-      document.getElementById("msg").innerText = "カメラ起動中...";
-      await startCam(v1, document.getElementById("sel1").value);
-      await startCam(v2, document.getElementById("sel2").value);
-      isRec = true;
-      document.getElementById("stopBtn").disabled = false;
-      document.getElementById("msg").innerText = "分析中...";
-      render();
-    } catch (e) {
-      alert("カメラ起動失敗: " + e.message);
-      document.getElementById("startBtn").disabled = false;
-    }
+    await startCam(v1, document.getElementById("sel1").value);
+    await startCam(v2, document.getElementById("sel2").value);
+    isRec = true;
+    document.getElementById("startBtn").disabled = true;
+    document.getElementById("stopBtn").disabled = false;
+    render();
   };
 
   function render() {
     if(!isRec) return;
     const now = performance.now();
 
-    try {
-      // ① 視線
-      if(v1.readyState >= 2 && v1.videoWidth > 0) {
-        ctx1.drawImage(v1, 0, 0, 320, 240);
-        const resF = faceLM.detectForVideo(v1, now);
-        if(resF.faceLandmarks && resF.faceLandmarks.length > 0) {
-          curIris = resF.faceLandmarks[0][468]; 
-          curGDir = (curIris.y < 0.43) ? "Up" : (curIris.x < 0.48) ? "Right" : (curIris.x > 0.52) ? "Left" : "Center";
-          document.getElementById("res1").innerText = curGDir;
-          document.getElementById("gCoord").innerText = `${curIris.x.toFixed(2)}, ${curIris.y.toFixed(2)}`;
-        }
-      }
+    // ① 視線解析
+    if(v1.readyState >= 2) {
+      ctx1.drawImage(v1, 0, 0, 320, 240);
+      const resF = faceLM.detectForVideo(v1, now);
+      if(resF.faceLandmarks && resF.faceLandmarks.length > 0) {
+        const leftIris = resF.faceLandmarks[0][468]; 
+        const rightIris = resF.faceLandmarks[0][473];
+        curIris = leftIris;
 
-      // ② 手元
-      if(v2.readyState >= 2 && v2.videoWidth > 0) {
-        ctx2.drawImage(v2, 0, 0, 320, 240);
-        const resH = handLM.detectForVideo(v2, now);
-        curR = {x:null, y:null, z:null}; curL = {x:null, y:null, z:null};
+        // 虹彩距離計算
+        irisDist = Math.sqrt(Math.pow(leftIris.x - rightIris.x, 2) + Math.pow(leftIris.y - rightIris.y, 2));
 
-        if(resH.landmarks && resH.landmarks.length > 0) {
-          for (let i = 0; i < resH.landmarks.length; i++) {
-            const landmarks = resH.landmarks[i];
-            let label = "Right";
-            if (resH.handedness && resH.handedness[i]) {
-                label = resH.handedness[i][0].categoryName;
-            }
-            const p = landmarks[9];
-            if(label === 'Right' || resH.landmarks.length === 1) {
-               curR = {x:p.x, y:p.y, z:p.z};
-               document.getElementById("rStatus").innerText = `X:${p.x.toFixed(2)} Y:${p.y.toFixed(2)}`;
-            } else {
-               curL = {x:p.x, y:p.y, z:p.z};
-               document.getElementById("lStatus").innerText = `X:${p.x.toFixed(2)} Y:${p.y.toFixed(2)}`;
-            }
-            window.drawConnectors(ctx2, landmarks, HandLandmarker.HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 2});
-          }
-          if(curR.x !== null) {
-            const d = Math.sqrt(Math.pow(curIris.x - curR.x, 2) + Math.pow(curIris.y - curR.y, 2));
-            document.getElementById("distStatus").innerText = d.toFixed(3);
-            distHist.push(d); distHist.shift();
-            drawGraph();
-            dataLog.push([new Date().toISOString(), curGDir, curIris.x.toFixed(4), curIris.y.toFixed(4), curR.x.toFixed(4), curR.y.toFixed(4), curR.z.toFixed(4), curL.x||"", curL.y||"", curL.z||"", d.toFixed(4)]);
-          }
-        }
+        // 中心0.45からの偏差を100倍スケール化
+        const relY = (leftIris.y - 0.45) * 100;
+        const relX = (leftIris.x - 0.5) * 100;
+
+        // y座標 10～-10判定
+        curGDir = (relY < -10) ? "Up" : (relY > 10) ? "Down" : (Math.abs(relX) > 5 ? (relX < 0 ? "Right":"Left") : "Center");
+        
+        document.getElementById("res1").innerText = curGDir;
+        document.getElementById("gCoord").innerHTML = `X:${relX.toFixed(1)} Y:${relY.toFixed(1)} PD:${irisDist.toFixed(3)}`;
       }
-    } catch (e) { console.error("分析エラー:", e); }
+    }
+
+    // ② 手元解析
+    if(v2.readyState >= 2) {
+      ctx2.drawImage(v2, 0, 0, 320, 240);
+      const resH = handLM.detectForVideo(v2, now);
+      if(resH.landmarks && resH.landmarks.length > 0) {
+        const p = resH.landmarks[0][9];
+        curR = {x:p.x, y:p.y};
+        document.getElementById("rStatus").innerText = `X:${p.x.toFixed(2)} Y:${p.y.toFixed(2)}`;
+        window.drawConnectors(ctx2, resH.landmarks[0], HandLandmarker.HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 2});
+
+        const d = Math.sqrt(Math.pow(curIris.x - curR.x, 2) + Math.pow(curIris.y - curR.y, 2));
+        document.getElementById("distStatus").innerText = d.toFixed(3);
+        dataLog.push([new Date().toISOString(), curGDir, irisDist.toFixed(4), curIris.x.toFixed(4), curIris.y.toFixed(4), curR.x.toFixed(4), curR.y.toFixed(4), d.toFixed(4)]);
+      }
+    }
     requestAnimationFrame(render);
-  }
-
-  function drawGraph() {
-    gCtx.clearRect(0, 0, 320, 60);
-    gCtx.strokeStyle = "#1a73e8";
-    gCtx.lineWidth = 2;
-    gCtx.beginPath();
-    distHist.forEach((v, i) => {
-      const x = (320 / 50) * i, y = 60 - (v * 100);
-      if(i === 0) gCtx.moveTo(x, y); else gCtx.lineTo(x, y);
-    });
-    gCtx.stroke();
   }
 
   document.getElementById("stopBtn").onclick = () => {
@@ -200,7 +163,7 @@
     const csv = "\ufeff" + dataLog.map(e => e.join(",")).join("\n");
     const link = document.createElement("a");
     link.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
-    link.download = `analysis_${Date.now()}.csv`;
+    link.download = `lego_trial_${Date.now()}.csv`;
     link.click();
     setTimeout(() => location.reload(), 500);
   };
