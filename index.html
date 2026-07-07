@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <title>技能分析 - 感度強化版</title>
+  <title>技能分析 - カメラ修正版</title>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.js"></script>
   <style>
     body { font-family: sans-serif; background: #f0f2f5; text-align: center; margin: 0; padding-bottom: 150px; }
@@ -16,34 +16,34 @@
     button { padding: 12px 35px; font-size: 16px; border-radius: 50px; border: none; cursor: pointer; font-weight: bold; }
     #startBtn { background: #1a73e8; color: white; }
     #stopBtn { background: #ea4335; color: white; margin-left: 10px; }
+    .err { color: red; font-weight: bold; margin: 10px; }
   </style>
 </head>
 <body>
 
-<h2 style="margin-top:20px;">技能習得分析：手のひら重心（感度強化版）</h2>
-<div id="loadingMsg">AIモデル読み込み中...</div>
+<h2 style="margin-top:20px;">技能習得分析（カメラエラー対策版）</h2>
+<div id="loadingMsg">AIモデル準備中...</div>
+<div id="errMsg" class="err"></div>
 
 <div class="container">
   <div class="box">
-    <h3 style="color:#1a73e8;">① 視線解析</h3>
+    <h3 style="color:#1a73e8;">① 視線解析用カメラ</h3>
     <select id="sel1" style="width:100%; margin-bottom:10px;"></select>
     <div class="video-wrap">
       <video id="v1" autoplay playsinline muted></video>
       <canvas id="c1" width="400" height="300"></canvas>
     </div>
-    <div class="status">視線座標: <span id="gWStatus">-</span></div>
   </div>
 
   <div class="box">
-    <h3 style="color:#ea4335;">② 手のひら解析</h3>
+    <h3 style="color:#ea4335;">② 手元解析用カメラ</h3>
     <select id="sel2" style="width:100%; margin-bottom:10px;"></select>
     <div class="video-wrap">
       <video id="v2" autoplay playsinline muted></video>
       <canvas id="c2" width="400" height="300"></canvas>
     </div>
     <div class="status">
-      左手: <span id="lHStatus">待機中</span><br>
-      右手: <span id="rHStatus">待機中</span><br>
+      右手重心: <span id="rHStatus">待機中</span><br>
       同期距離: <span id="distStatus" style="font-weight:bold; color:red;">-</span>
     </div>
   </div>
@@ -51,9 +51,9 @@
 
 <div class="controls">
   試行：第 <input type="number" id="trialNum" value="1" style="width:50px;"> 回目
-  <button id="startBtn" disabled>カメラ起動・記録開始</button>
+  <button id="startBtn" disabled>カメラ起動</button>
   <button id="stopBtn" disabled>保存して終了</button>
-  <div id="debugMsg" style="font-size:10px; color:gray; margin-top:5px;"></div>
+  <p style="font-size:11px; color:#666;">※左右のカメラは必ず「別のもの」を選択してください。</p>
 </div>
 
 <script type="module">
@@ -61,69 +61,82 @@
 
   let faceLM, handLM;
   let isRec = false, dataLog = [];
-  let gazeW = {x:0.5, y:0.5}, hL = {x:0.5, y:0.5}, hR = {x:0.5, y:0.5};
-  const SMOOTHING = 0.4;
+  let gazeW = {x:0.5, y:0.5}, hR = {x:0.5, y:0.5};
 
   async function setup() {
     try {
       const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
-      
       faceLM = await FaceLandmarker.createFromOptions(vision, {
         baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task" },
         runningMode: "VIDEO"
       });
-
-      // 【修正点】検出感度を大幅に下げて(0.3)、真上からの手を見逃さないように設定
       handLM = await HandLandmarker.createFromOptions(vision, {
         baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task" },
-        runningMode: "VIDEO", 
-        numHands: 2, 
-        minHandDetectionConfidence: 0.3, 
-        minHandPresenceConfidence: 0.3,
-        minTrackingConfidence: 0.3
+        runningMode: "VIDEO", numHands: 2, minHandDetectionConfidence: 0.3
       });
+
+      // 最初の一回だけカメラ権限を求めてリストアップ
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      stream.getTracks().forEach(t => t.stop());
 
       const vids = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
       vids.forEach((v, i) => { 
         document.getElementById("sel1").add(new Option(v.label||`Cam ${i+1}`, v.deviceId)); 
         document.getElementById("sel2").add(new Option(v.label||`Cam ${i+1}`, v.deviceId)); 
       });
+      
+      // デフォルトで別のカメラを選ぶように設定
       if(vids.length > 1) document.getElementById("sel2").selectedIndex = 1;
 
       document.getElementById("loadingMsg").style.display = "none";
       document.getElementById("startBtn").disabled = false;
     } catch (e) {
-      document.getElementById("loadingMsg").innerText = "エラー: AIの起動に失敗しました " + e;
+      document.getElementById("errMsg").innerText = "AI起動エラー: カメラ権限を許可して再読み込みしてください。";
     }
   }
 
   const v1 = document.getElementById("v1"), v2 = document.getElementById("v2");
   const ctx1 = document.getElementById("c1").getContext("2d"), ctx2 = document.getElementById("c2").getContext("2d");
 
-  async function startCam(vEl, id) {
+  // カメラを個別に停止・起動する関数
+  async function safeStart(vEl, id) {
+    if(vEl.srcObject) {
+      vEl.srcObject.getTracks().forEach(t => t.stop());
+    }
     const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { deviceId: {exact:id}, width: 640, height: 480 } 
+      video: { deviceId: id ? {exact:id} : undefined, width: 640, height: 480 } 
     });
     vEl.srcObject = stream;
-    return new Promise(resolve => vEl.onloadedmetadata = () => resolve());
+    await new Promise(r => vEl.onloadedmetadata = r);
   }
 
   document.getElementById("startBtn").onclick = async () => {
+    const id1 = document.getElementById("sel1").value;
+    const id2 = document.getElementById("sel2").value;
+
+    if(id1 === id2 && document.getElementById("sel1").length > 1) {
+      alert("エラー：左と右で同じカメラが選択されています。別のカメラを選んでください。");
+      return;
+    }
+
     try {
-      await startCam(v1, document.getElementById("sel1").value);
-      await startCam(v2, document.getElementById("sel2").value);
+      document.getElementById("errMsg").innerText = "カメラ起動中...";
+      await safeStart(v1, id1);
+      await safeStart(v2, id2);
+      document.getElementById("errMsg").innerText = "";
       isRec = true;
-      dataLog = [["Trial","Time","Gaze_X","Gaze_Y","LH_X","LH_Y","RH_X","RH_Y","Dist"]];
+      dataLog = [["Trial","Time","Gaze_X","Gaze_Y","RH_X","RH_Y","Dist"]];
       document.getElementById("stopBtn").disabled = false;
       render();
-    } catch (e) { alert("カメラの起動に失敗しました。権限を許可してください。"); }
+    } catch (e) {
+      document.getElementById("errMsg").innerText = "カメラ起動失敗。他のアプリ(Zoom等)でカメラを使っていないか確認してください。";
+    }
   };
 
   function render() {
     if(!isRec) return;
     const now = performance.now();
     
-    // ① 視線
     if(v1.readyState >= 2) {
       ctx1.drawImage(v1, 0, 0, 400, 300);
       const resF = faceLM.detectForVideo(v1, now);
@@ -131,58 +144,39 @@
         const iris = resF.faceLandmarks[0][468];
         gazeW.x = Math.max(0, Math.min(1, 0.5 + (iris.x - 0.5) * 5.0));
         gazeW.y = Math.max(0, Math.min(1, 0.5 + (iris.y - 0.45) * 6.5));
-        document.getElementById("gWStatus").innerText = `X:${gazeW.x.toFixed(2)} Y:${gazeW.y.toFixed(2)}`;
         ctx1.fillStyle = "lime"; ctx1.beginPath(); ctx1.arc(iris.x*400, iris.y*300, 5, 0, 7); ctx1.fill();
       }
     }
 
-    // ② 手元 (重心計算)
     if(v2.readyState >= 2) {
       ctx2.drawImage(v2, 0, 0, 400, 300);
       const resH = handLM.detectForVideo(v2, now);
-      
-      let foundL = false, foundR = false;
+      let foundR = false;
       if(resH.landmarks && resH.landmarks.length > 0) {
         resH.landmarks.forEach((lm, idx) => {
           const label = resH.handedness[idx][0].categoryName;
-          // 重心計算 (手首0, 人差し指5, 中指9, 小指17)
           const p = [lm[0], lm[5], lm[9], lm[17]];
           const avgX = p.reduce((s,v)=>s+v.x,0)/4;
           const avgY = p.reduce((s,v)=>s+v.y,0)/4;
 
-          if(label === 'Left' || resH.handedness[idx][0].index === 0) {
-            hL.x = hL.x + (avgX - hL.x) * SMOOTHING;
-            hL.y = hL.y + (avgY - hL.y) * SMOOTHING;
-            foundL = true;
-            drawPoint(ctx2, hL.x*400, hL.y*300, "red");
-          } else {
-            hR.x = hR.x + (avgX - hR.x) * SMOOTHING;
-            hR.y = hR.y + (avgY - hR.y) * SMOOTHING;
+          if(label === 'Right' || resH.handedness.length === 1) {
+            hR.x = hR.x + (avgX - hR.x) * 0.4;
+            hR.y = hR.y + (avgY - hR.y) * 0.4;
             foundR = true;
-            drawPoint(ctx2, hR.x*400, hR.y*300, "blue");
+            ctx2.fillStyle = "blue"; ctx2.beginPath(); ctx2.arc(hR.x*400, hR.y*300, 10, 0, 7); ctx2.fill();
           }
         });
       }
-
-      document.getElementById("lHStatus").innerText = foundL ? "検知中" : "待機中";
       document.getElementById("rHStatus").innerText = foundR ? "検知中" : "待機中";
-
-      // 視線マーカーを重ねる
-      ctx2.strokeStyle = "lime"; ctx2.lineWidth = 3;
+      ctx2.strokeStyle = "lime"; ctx2.lineWidth = 2;
       ctx2.strokeRect(gazeW.x*400-10, gazeW.y*300-10, 20, 20);
-
       if(foundR) {
         const d = Math.sqrt(Math.pow(gazeW.x-hR.x,2) + Math.pow(gazeW.y-hR.y,2));
         document.getElementById("distStatus").innerText = d.toFixed(3);
-        if(isRec) dataLog.push([document.getElementById("trialNum").value, (now/1000).toFixed(2), gazeW.x.toFixed(3), gazeW.y.toFixed(3), hL.x.toFixed(3), hL.y.toFixed(3), hR.x.toFixed(3), hR.y.toFixed(3), d.toFixed(4)]);
+        if(isRec) dataLog.push([document.getElementById("trialNum").value, (now/1000).toFixed(2), gazeW.x.toFixed(3), gazeW.y.toFixed(3), hR.x.toFixed(3), hR.y.toFixed(3), d.toFixed(4)]);
       }
     }
     requestAnimationFrame(render);
-  }
-
-  function drawPoint(ctx, x, y, col) {
-    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y, 10, 0, 7); ctx.fill();
-    ctx.strokeStyle = "white"; ctx.lineWidth = 2; ctx.stroke();
   }
 
   document.getElementById("stopBtn").onclick = () => {
@@ -194,7 +188,6 @@
     link.click();
     document.getElementById("trialNum").value = parseInt(document.getElementById("trialNum").value) + 1;
   };
-
   setup();
 </script>
 </body>
