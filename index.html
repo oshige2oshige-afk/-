@@ -2,9 +2,8 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <title>技能分析 - 全画面広域トラッキング版</title>
+  <title>技能分析 - 瞬時手部検知・全画面版</title>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
   <style>
     body { font-family: sans-serif; background: #f0f2f5; text-align: center; margin: 0; padding-bottom: 150px; }
     .container { display: flex; justify-content: center; gap: 10px; padding: 10px; flex-wrap: wrap; }
@@ -17,37 +16,38 @@
     button { padding: 12px 40px; font-size: 16px; border-radius: 30px; border: none; cursor: pointer; font-weight: bold; }
     #startBtn { background: #1a73e8; color: white; }
     #stopBtn { background: #ea4335; color: white; margin-left: 10px; }
+    .active-hand { color: #d93025; font-weight: bold; }
   </style>
 </head>
 <body>
 
-<h2 style="margin-top:20px;">技能習得分析：全画面広域計測システム</h2>
+<h2 style="margin-top:20px;">技能習得分析：瞬時手部トラッキングシステム</h2>
 
 <div class="container">
   <div class="box">
-    <h3 style="color:#1a73e8;">① 視線解析 (65cm距離)</h3>
+    <h3 style="color:#1a73e8;">① 視線解析 (顔カメラ 65cm)</h3>
     <select id="sel1" style="width:100%; margin-bottom:10px;"></select>
     <div class="video-wrap">
       <video id="v1" autoplay playsinline muted></video>
       <canvas id="c1" width="320" height="240"></canvas>
     </div>
     <div class="status">
-      偏差Y: <span id="yVal">-</span> (10〜-10が中央)<br>
-      注視座標: <span id="gWStatus">-</span>
+      中心偏差Y: <span id="yVal">-</span><br>
+      注視点座標: <span id="gWStatus">-</span>
     </div>
   </div>
 
   <div class="box">
-    <h3 style="color:#ea4335;">② 手元動作解析 (全画角)</h3>
+    <h3 style="color:#ea4335;">② 手元動作解析 (俯瞰カメラ)</h3>
     <select id="sel2" style="width:100%; margin-bottom:10px;"></select>
     <div class="video-wrap">
       <video id="v2" autoplay playsinline muted></video>
       <canvas id="c2" width="320" height="240"></canvas>
     </div>
     <div class="status">
-      左手のひら(赤): <span id="lH">-</span><br>
-      右手のひら(青): <span id="rH">-</span><br>
-      シンクロ距離: <span id="distStatus" style="font-weight:bold; color:red;">-</span>
+      左手: <span id="lHStatus">未検知</span><br>
+      右手: <span id="rHStatus">未検知</span><br>
+      手眼シンクロ距離: <span id="distStatus" style="font-weight:bold; color:red;">-</span>
     </div>
   </div>
 </div>
@@ -56,7 +56,7 @@
   試行：第 <input type="number" id="trialNum" value="1" style="width:50px; font-size:18px;"> 回目
   <button id="startBtn" disabled>記録開始</button>
   <button id="stopBtn" disabled>保存して終了</button>
-  <p id="msg" style="margin-top:5px; font-size:12px; color:#666;">AIモデル読み込み完了。記録を開始してください。</p>
+  <p id="msg" style="margin-top:5px; font-size:12px; color:#666;">AI準備完了。手が画角に入ると即座に認識します。</p>
 </div>
 
 <script type="module">
@@ -66,7 +66,6 @@
   let dataLog = [];
   let gazeW = {x:0.5, y:0.5}, hL = {x:0, y:0}, hR = {x:0, y:0};
   
-  // 65cm離れた顔カメラから画面全体をカバーするための感度設定
   const GAZE_SENS_X = 5.0; 
   const GAZE_SENS_Y = 6.5; 
 
@@ -88,7 +87,7 @@
       });
       if(vids.length > 1) s2.selectedIndex = 1;
       document.getElementById("startBtn").disabled = false;
-    } catch (e) { document.getElementById("msg").innerText = "エラー: AIをロードできません"; }
+    } catch (e) { document.getElementById("msg").innerText = "エラー: AIを起動できません"; }
   }
 
   async function startCam(vEl, id) {
@@ -102,7 +101,7 @@
     isRec = true;
     dataLog = [["Trial","Time","Gaze_X","Gaze_Y","LH_X","LH_Y","RH_X","RH_Y","Dist"]];
     document.getElementById("stopBtn").disabled = false;
-    document.getElementById("msg").innerText = "計測中...";
+    document.getElementById("msg").innerText = "計測中... 手を動かしてください。";
     render();
   };
 
@@ -114,11 +113,7 @@
       ctx1.drawImage(v1, 0, 0, 320, 240);
       const res = faceLM.detectForVideo(v1, now);
       if(res.faceLandmarks && res.faceLandmarks.length > 0) {
-        const lm = res.faceLandmarks[0];
-        window.drawConnectors(ctx1, lm, FaceLandmarker.FACE_LANDMARKS_RIGHT_EYE, {color: '#00FF00', lineWidth: 1});
-        window.drawConnectors(ctx1, lm, FaceLandmarker.FACE_LANDMARKS_LEFT_EYE, {color: '#00FF00', lineWidth: 1});
-        const iris = lm[468];
-        // 全画面(0.0-1.0)へのマッピング
+        const iris = res.faceLandmarks[0][468];
         gazeW.x = Math.max(0, Math.min(1, 0.5 + (iris.x - 0.5) * GAZE_SENS_X));
         gazeW.y = Math.max(0, Math.min(1, 0.5 + (iris.y - 0.45) * GAZE_SENS_Y));
         document.getElementById("yVal").innerText = ((iris.y-0.45)*100).toFixed(1);
@@ -126,38 +121,47 @@
       }
     }
 
-    if(!isRec) {
-      if(v2.readyState >= 2) ctx2.drawImage(v2, 0, 0, 320, 240);
-      requestAnimationFrame(render); return;
-    }
-
-    // ② 手元全画面解析 (肌色重心/手のひら中心)
+    // ② 手元全画面解析 (肌色の塊を瞬時に検知)
     if(v2.readyState >= 2) {
       ctx2.drawImage(v2, 0, 0, 320, 240);
       const img = ctx2.getImageData(0, 0, 320, 240).data;
       let lpx=0, lpy=0, lc=0, rpx=0, rpy=0, rc=0;
-      // 画面全体をスキャン
-      for(let i=0; i<img.length; i+=32) { // 処理軽減のため32ピクセル飛ばし
-        if(img[i] > 105 && img[i] > img[i+1] && img[i+1] > 45) { // 肌色フィルタ
+
+      // 手全体の「塊」として重心を計算 (32ピクセル飛ばしで高速スキャン)
+      for(let i=0; i<img.length; i+=128) { 
+        const r = img[i], g = img[i+1], b = img[i+2];
+        // 瞬時認識のための肌色フィルタ
+        if(r > 105 && r > g && g > 40 && r > b) {
           const x = (i/4)%320, y = Math.floor((i/4)/320);
           if(x < 160) { lpx+=x; lpy+=y; lc++; } else { rpx+=x; rpy+=y; rc++; }
         }
       }
-      hL = lc > 5 ? {x:lpx/lc/320, y:lpy/lc/240} : {x:0, y:0};
-      hR = rc > 5 ? {x:rpx/rc/320, y:rpy/rc/240} : {x:0, y:0};
+
+      // 検知しきい値（一定以上の画素があれば「手が入った」とみなす）
+      if(lc > 3) {
+        hL = {x:lpx/lc/320, y:lpy/lc/240};
+        document.getElementById("lHStatus").innerHTML = `<span class="active-hand">検知中 (X:${hL.x.toFixed(2)} Y:${hL.y.toFixed(2)})</span>`;
+        ctx2.fillStyle = "rgba(255, 0, 0, 0.8)"; ctx2.beginPath(); ctx2.arc(hL.x*320, hL.y*240, 20, 0, 7); ctx2.fill();
+      } else {
+        document.getElementById("lHStatus").innerText = "未検知";
+      }
+
+      if(rc > 3) {
+        hR = {x:rpx/rc/320, y:rpy/rc/240};
+        document.getElementById("rHStatus").innerHTML = `<span class="active-hand">検知中 (X:${hR.x.toFixed(2)} Y:${hR.y.toFixed(2)})</span>`;
+        ctx2.fillStyle = "rgba(0, 0, 255, 0.8)"; ctx2.beginPath(); ctx2.arc(hR.x*320, hR.y*240, 20, 0, 7); ctx2.fill();
+        
+        // 手眼距離の計算
+        const d = Math.sqrt(Math.pow(gazeW.x-hR.x,2) + Math.pow(gazeW.y-hR.y,2));
+        document.getElementById("distStatus").innerText = d.toFixed(3);
+        
+        if(isRec) dataLog.push([document.getElementById("trialNum").value, (now/1000).toFixed(2), gazeW.x.toFixed(3), gazeW.y.toFixed(3), hL.x.toFixed(3), hL.y.toFixed(3), hR.x.toFixed(3), hR.y.toFixed(3), d.toFixed(4)]);
+      } else {
+        document.getElementById("rHStatus").innerText = "未検知";
+      }
       
-      // 可視化：手のひら中心
-      ctx2.fillStyle = "rgba(255,0,0,0.7)"; ctx2.beginPath(); ctx2.arc(hL.x*320, hL.y*240, 15,0,7); ctx2.fill();
-      ctx2.fillStyle = "rgba(0,0,255,0.7)"; ctx2.beginPath(); ctx2.arc(hR.x*320, hR.y*240, 15,0,7); ctx2.fill();
-      // 可視化：視線注視点
-      ctx2.fillStyle = "lime"; ctx2.beginPath(); ctx2.arc(gazeW.x*320, gazeW.y*240, 6,0,7); ctx2.fill();
-      
-      const d = Math.sqrt(Math.pow(gazeW.x-hR.x,2) + Math.pow(gazeW.y-hR.y,2));
-      document.getElementById("lH").innerText = `X:${hL.x.toFixed(2)} Y:${hL.y.toFixed(2)}`;
-      document.getElementById("rH").innerText = `X:${hR.x.toFixed(2)} Y:${hR.y.toFixed(2)}`;
-      document.getElementById("distStatus").innerText = d.toFixed(3);
-      
-      dataLog.push([document.getElementById("trialNum").value, (now/1000).toFixed(2), gazeW.x.toFixed(3), gazeW.y.toFixed(3), hL.x.toFixed(3), hL.y.toFixed(3), hR.x.toFixed(3), hR.y.toFixed(3), d.toFixed(4)]);
+      // 視線注視点（緑）
+      ctx2.fillStyle = "lime"; ctx2.beginPath(); ctx2.arc(gazeW.x*320, gazeW.y*240, 6, 0, 7); ctx2.fill();
     }
     requestAnimationFrame(render);
   }
@@ -167,10 +171,9 @@
     const csv = "\ufeff" + dataLog.map(e => e.join(",")).join("\n");
     const link = document.createElement("a");
     link.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
-    link.download = `trial_${document.getElementById("trialNum").value}.csv`;
+    link.download = `lego_instant_trial_${document.getElementById("trialNum").value}.csv`;
     link.click();
     document.getElementById("trialNum").value = parseInt(document.getElementById("trialNum").value) + 1;
-    document.getElementById("msg").innerText = "保存完了。次の試行を開始できます。";
   };
   setup();
 </script>
