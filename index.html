@@ -11,9 +11,9 @@
     .video-wrap { position: relative; width: 320px; height: 240px; background: #000; border-radius: 10px; overflow: hidden; }
     video { display: none; } 
     canvas { position: absolute; top: 0; left: 0; width: 320px; height: 240px; }
-    .status { background: #f1f3f4; padding: 10px; border-radius: 8px; font-size: 13px; margin-top: 10px; text-align: left; }
+    .status { background: #f1f3f4; padding: 10px; border-radius: 8px; font-size: 13px; margin-top: 10px; text-align: left; min-height: 60px; }
     .controls { background: white; padding: 20px; position: fixed; bottom: 0; width: 100%; border-top: 1px solid #ddd; z-index: 1000; }
-    button { padding: 10px 20px; font-size: 15px; border-radius: 30px; border: none; cursor: pointer; font-weight: bold; margin: 5px; }
+    button { padding: 10px 25px; font-size: 15px; border-radius: 30px; border: none; cursor: pointer; font-weight: bold; margin: 0 5px; }
     #autoBtn { background: #34a853; color: white; }
     #startBtn { background: #1a73e8; color: white; }
     #stopBtn { background: #ea4335; color: white; }
@@ -25,7 +25,7 @@
 
 <div class="container">
   <div class="box">
-    <h3 style="color:#1a73e8;">① 視線解析</h3>
+    <h3 style="color:#1a73e8;">① 視線解析 (正面)</h3>
     <select id="sel1" style="width:100%; margin-bottom:10px;"></select>
     <div class="video-wrap">
       <video id="v1" autoplay playsinline muted></video>
@@ -34,25 +34,25 @@
   </div>
 
   <div class="box">
-    <h3 style="color:#ea4335;">② 手元動作解析</h3>
+    <h3 style="color:#ea4335;">② 手元動作解析 (俯瞰)</h3>
     <select id="sel2" style="width:100%; margin-bottom:10px;"></select>
     <div class="video-wrap">
       <video id="v2" autoplay playsinline muted></video>
       <canvas id="c2" width="320" height="240"></canvas>
     </div>
     <div class="status">
-      物理枠内座標 X: <span id="hX">-</span> Y: <span id="hY">-</span><br>
-      手眼シンクロ距離: <span id="distStatus">-</span>
+      枠内座標 X: <span id="hX">-</span> Y: <span id="hY">-</span><br>
+      手眼シンクロ距離: <span id="distStatus" style="font-weight:bold; color:red;">-</span>
     </div>
   </div>
 </div>
 
 <div class="controls">
-  試行：第 <input type="number" id="trialNum" value="1" style="width:40px;"> 回
+  試行：第 <input type="number" id="trialNum" value="1" style="width:40px;"> 回目
   <button id="autoBtn">枠を自動検知</button>
   <button id="startBtn" disabled>記録開始</button>
   <button id="stopBtn" disabled>保存して終了</button>
-  <p id="msg" style="margin:5px 0 0 0; font-size:12px;">AI準備中...</p>
+  <p id="msg" style="margin:5px 0 0 0; font-size:12px; color:#666;">カメラを選び「枠を自動検知」を押してください</p>
 </div>
 
 <script type="module">
@@ -60,7 +60,7 @@
 
   let faceLM, isRec = false;
   let dataLog = [];
-  let roi = { x: 40, y: 30, w: 240, h: 180 }; // 初期値
+  let roi = { x: 50, y: 40, w: 220, h: 160 }; // デフォルト値
 
   let gazeW = {x:0.5, y:0.5}, handW = {x:0.5, y:0.5}, curGDir = "-";
 
@@ -74,15 +74,17 @@
       runningMode: "VIDEO"
     });
     const vids = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+    const s1 = document.getElementById("sel1"), s2 = document.getElementById("sel2");
     vids.forEach((v, i) => { 
-      document.getElementById("sel1").add(new Option(v.label || `Cam ${i+1}`, v.deviceId)); 
-      document.getElementById("sel2").add(new Option(v.label || `Cam ${i+1}`, v.deviceId)); 
+      s1.add(new Option(v.label || `Cam ${i+1}`, v.deviceId)); 
+      s2.add(new Option(v.label || `Cam ${i+1}`, v.deviceId)); 
     });
+    if(vids.length > 1) s2.selectedIndex = 1;
     document.getElementById("startBtn").disabled = false;
-    document.getElementById("msg").innerText = "カメラを選択し「枠を自動検知」を押してください";
+    document.getElementById("msg").innerText = "システム準備完了";
   }
 
-  // 枠の自動検知ロジック
+  // テープ枠を自動検出するロジック
   document.getElementById("autoBtn").onclick = async () => {
     await startCam(v2, document.getElementById("sel2").value);
     setTimeout(() => {
@@ -93,8 +95,8 @@
 
       for(let i=0; i<imgData.length; i+=16) {
         const r = imgData[i], g = imgData[i+1], b = imgData[i+2];
-        // 白色の検知（輝度が高いピクセル）
-        if(r > 180 && g > 180 && b > 180) {
+        // 白色の検知（マステの白）
+        if(r > 190 && g > 190 && b > 190) {
           const x = (i/4) % 320;
           const y = Math.floor((i/4) / 320);
           if(x < minX) minX = x; if(x > maxX) maxX = x;
@@ -102,11 +104,11 @@
           found = true;
         }
       }
-      if(found) {
+      if(found && (maxX - minX) > 50) {
         roi = { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
-        document.getElementById("msg").innerText = "枠を検知しました。記録を開始できます。";
+        document.getElementById("msg").innerText = "物理枠を正常に検知しました。記録を開始できます。";
       } else {
-        alert("白い枠が見つかりません。照明を確認してください。");
+        alert("枠が検知できません。枠全体が映るように調整し、枠内に手を入れないでください。");
       }
     }, 1000);
   };
@@ -129,12 +131,13 @@
       if(v2.readyState >= 2) {
         ctx2.drawImage(v2, 0, 0, 320, 240);
         ctx2.strokeStyle = "#00FF00"; ctx2.lineWidth = 2;
-        ctx2.strokeRect(roi.x, roi.y, roi.w, roi.h);
+        ctx2.strokeRect(roi.x, roi.y, roi.w, roi.h); // 検知中の枠を表示
       }
       requestAnimationFrame(render); return;
     }
 
     const now = performance.now();
+    // ① 視線解析
     if(v1.readyState >= 2) {
       ctx1.drawImage(v1, 0, 0, 320, 240);
       const res = faceLM.detectForVideo(v1, now);
@@ -142,19 +145,21 @@
         const iris = res.faceLandmarks[0][468];
         const relY = (iris.y - 0.45) * 100;
         curGDir = (relY < -10) ? "Up" : (relY > 10) ? "Down" : "Center";
+        // 視線座標を作業枠内にマッピング
         gazeW.x = Math.max(0, Math.min(1, 0.5 + (iris.x - 0.5) * 4));
         gazeW.y = Math.max(0, Math.min(1, 0.5 + (iris.y - 0.45) * 4));
       }
     }
 
+    // ② 手元解析
     if(v2.readyState >= 2) {
       ctx2.drawImage(v2, 0, 0, 320, 240);
       ctx2.strokeStyle = "#00FF00"; ctx2.strokeRect(roi.x, roi.y, roi.w, roi.h);
       const imgData = ctx2.getImageData(roi.x, roi.y, roi.w, roi.h).data;
       let px=0, py=0, count=0;
-      for(let i=0; i<imgData.length; i+=16) {
+      for(let i=0; i<imgData.length; i+=32) {
         const r = imgData[i], g = imgData[i+1], b = imgData[i+2];
-        if(r > 100 && r > g && r > b && g > 40) { // 肌色検出
+        if(r > 100 && r > g && r > b && g > 40) { // 肌色検知
           px += (i/4)%roi.w; py += Math.floor((i/4)/roi.w); count++;
         }
       }
@@ -164,8 +169,10 @@
         document.getElementById("hX").innerText = handW.x.toFixed(2);
         document.getElementById("hY").innerText = handW.y.toFixed(2);
         document.getElementById("distStatus").innerText = dist.toFixed(3);
+        
         ctx2.fillStyle = "blue"; ctx2.beginPath(); ctx2.arc(roi.x + handW.x*roi.w, roi.y + handW.y*roi.h, 10, 0, 7); ctx2.fill();
         ctx2.fillStyle = "lime"; ctx2.beginPath(); ctx2.arc(roi.x + gazeW.x*roi.w, roi.y + gazeW.y*roi.h, 6, 0, 7); ctx2.fill();
+        
         dataLog.push([document.getElementById("trialNum").value, (now/1000).toFixed(2), curGDir, gazeW.x.toFixed(3), gazeW.y.toFixed(3), handW.x.toFixed(3), handW.y.toFixed(3), dist.toFixed(4)]);
       }
     }
@@ -177,7 +184,7 @@
     const csv = "\ufeff" + dataLog.map(e => e.join(",")).join("\n");
     const link = document.createElement("a");
     link.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
-    link.download = `lego_auto_roi_trial_${document.getElementById("trialNum").value}.csv`;
+    link.download = `lego_trial_${document.getElementById("trialNum").value}.csv`;
     link.click();
     document.getElementById("trialNum").value = parseInt(document.getElementById("trialNum").value) + 1;
   };
