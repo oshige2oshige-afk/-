@@ -3,10 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TDS-DMA Web: 技能分析システム（高速起動版）</title>
-    <!-- アイコンエラー(404)対策 -->
+    <title>TDS-DMA Web: 技能分析システム（パス混同対策版）</title>
+    <!-- アイコンエラー対策 -->
     <link rel="icon" href="data:,">
     
+    <!-- ライブラリ読み込み -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
@@ -20,42 +21,41 @@
         .video-wrapper { position: relative; width: 100%; aspect-ratio: 4/3; background: #000; border-radius: 8px; overflow: hidden; margin-top: 10px; }
         video, canvas { position: absolute; width: 100%; height: 100%; top: 0; left: 0; }
         .controls { position: fixed; bottom: 0; left: 0; width: 100%; background: rgba(0,0,0,0.9); padding: 20px; display: flex; justify-content: center; align-items: center; gap: 20px; border-top: 1px solid #444; z-index: 1000; }
-        button { padding: 12px 35px; font-size: 18px; font-weight: bold; cursor: pointer; border: none; border-radius: 50px; }
+        button { padding: 12px 35px; font-size: 18px; font-weight: bold; cursor: pointer; border: none; border-radius: 50px; transition: 0.3s; }
         #record-btn { background: var(--main-red); color: white; }
         #record-btn:disabled { background: #555; cursor: wait; }
         #dl-btn { background: #2ecc71; color: white; display: none; }
         .dashboard { width: 95%; max-width: 1000px; margin: 30px auto; background: var(--card-bg); padding: 25px; border-radius: 15px; display: none; }
         .chart-container { background: white; padding: 15px; border-radius: 10px; height: 300px; position: relative; }
         select { background: #333; color: white; padding: 8px; width: 100%; border-radius: 5px; margin-bottom: 5px; }
-        /* ロード画面の修正 */
-        .loading-overlay { position: absolute; top: 55px; left: 15px; width: calc(100% - 30px); height: calc(100% - 70px); background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 100; border-radius: 8px; font-size: 16px; color: #fff; pointer-events: none; }
+        .loading-overlay { position: absolute; top: 55px; left: 15px; width: calc(100% - 30px); height: calc(100% - 70px); background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 100; border-radius: 8px; font-size: 14px; }
     </style>
 </head>
 <body>
 
 <header>
     <h1>TAKUMI Development System (TDS-DMA Web)</h1>
-    <div id="ai-status">システム初期化中...</div>
+    <div id="ai-status">AIシステム初期化中...</div>
 </header>
 
 <div class="main-container">
     <div class="cam-box">
-        <div id="loader-f" class="loading-overlay">正面AI準備中...</div>
-        <select id="sel-f" onchange="changeCamF()"></select>
+        <div id="loader-f" class="loading-overlay">正面AIをロード中...</div>
+        <select id="sel-f"></select>
         <div class="video-wrapper"><video id="v-face" autoplay playsinline muted></video><canvas id="c-face"></canvas></div>
     </div>
     <div class="cam-box">
-        <div id="loader-h" class="loading-overlay">手元AI準備中...</div>
-        <select id="sel-h" onchange="changeCamH()"></select>
+        <div id="loader-h" class="loading-overlay">手元AIをロード中...</div>
+        <select id="sel-h"></select>
         <div class="video-wrapper"><video id="v-hand" autoplay playsinline muted></video><canvas id="c-hand"></canvas></div>
     </div>
 </div>
 
 <div class="controls">
     試行: <input type="number" id="trial" value="1" style="width:60px; padding:10px; text-align:center; border-radius:5px;">
-    <button id="record-btn" disabled>ロードを待っています...</button>
+    <button id="record-btn" disabled>ロード中...</button>
     <button id="dl-btn">CSV保存</button>
-    <button onclick="forceStart()" style="background:#444; font-size:12px; padding:5px 15px;">強制開始</button>
+    <button onclick="forceStart()" style="background:#444; font-size:12px;">強制開始</button>
 </div>
 
 <div class="dashboard" id="dash">
@@ -73,55 +73,71 @@ let log = [];
 let state = { gaze: "Center", rx: null, ry: null };
 let charts = {};
 
+// --- AIエンジンの初期化（パス混同を回避するために完全に分ける） ---
 async function initAI() {
     if (typeof window.FaceMesh === 'undefined') {
         setTimeout(initAI, 500); return;
     }
 
-    // 正面AI（FaceMesh）の初期化
-    faceMesh = new window.FaceMesh({locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`});
-    faceMesh.setOptions({ refineLandmarks: true, minDetectionConfidence: 0.5 });
-    faceMesh.onResults(res => {
-        const ctx = document.getElementById('c-face').getContext('2d');
-        ctx.clearRect(0, 0, 640, 480);
-        if (res.multiFaceLandmarks?.length > 0) {
-            const n = res.multiFaceLandmarks[0][1];
-            state.gaze = (n.x < 0.47 || n.x > 0.53) ? "Off-Center" : "Center";
-            drawConnectors(ctx, res.multiFaceLandmarks[0], FACEMESH_TESSELATION, {color: '#C0C0C050', lineWidth: 1});
-        }
-    });
+    try {
+        // 正面AI: FaceMesh専用の読み込みパス
+        faceMesh = new window.FaceMesh({
+            locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+            }
+        });
+        
+        // 手元AI: Hands専用の読み込みパス（混同を避けるために独立させる）
+        hands = new window.Hands({
+            locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+            }
+        });
 
-    // 手元AI（Hands）の初期化
-    hands = new window.Hands({locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
-    hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.5 });
-    hands.onResults(res => {
-        const ctx = document.getElementById('c-hand').getContext('2d');
-        ctx.clearRect(0, 0, 640, 480);
-        state.rx = state.ry = null;
-        if (res.multiHandLandmarks) {
-            const lms = res.multiHandLandmarks[0];
-            state.rx = (lms[9].x*100).toFixed(1); state.ry = ((1-lms[9].y)*100).toFixed(1);
-            drawConnectors(ctx, lms, HAND_CONNECTIONS, {color: '#FF0000', lineWidth: 3});
-        }
-    });
+        faceMesh.setOptions({ refineLandmarks: true, minDetectionConfidence: 0.5 });
+        hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.5 });
 
-    // 各エンジンのロード完了を明示的に待つ必要はないため、数秒後に強制開放する
-    setTimeout(() => {
-        faceReady = handsReady = true;
-        document.getElementById('loader-f').style.display = 'none';
-        document.getElementById('loader-h').style.display = 'none';
+        faceMesh.onResults(res => {
+            faceReady = true; document.getElementById('loader-f').style.display = 'none';
+            const ctx = document.getElementById('c-face').getContext('2d');
+            ctx.clearRect(0, 0, 640, 480);
+            if (res.multiFaceLandmarks?.length > 0) {
+                const n = res.multiFaceLandmarks[0][1];
+                state.gaze = (n.x < 0.47 || n.x > 0.53) ? "Off-Center" : "Center";
+                drawConnectors(ctx, res.multiFaceLandmarks[0], FACEMESH_TESSELATION, {color: '#C0C0C050', lineWidth: 1});
+            }
+            checkAllReady();
+        });
+
+        hands.onResults(res => {
+            handsReady = true; document.getElementById('loader-h').style.display = 'none';
+            const ctx = document.getElementById('c-hand').getContext('2d');
+            ctx.clearRect(0, 0, 640, 480);
+            state.rx = state.ry = null;
+            if (res.multiHandLandmarks) {
+                const lms = res.multiHandLandmarks[0];
+                state.rx = (lms[9].x*100).toFixed(1); state.ry = ((1-lms[9].y)*100).toFixed(1);
+                drawConnectors(ctx, lms, HAND_CONNECTIONS, {color: '#FF0000', lineWidth: 3});
+            }
+            checkAllReady();
+        });
+
+        initCameras();
+    } catch (e) { console.error("AI Init Error:", e); }
+}
+
+function checkAllReady() {
+    if(faceReady && handsReady) {
         document.getElementById('record-btn').disabled = false;
         document.getElementById('record-btn').innerText = "計測開始";
-        document.getElementById('ai-status').innerText = "システム準備完了";
-    }, 5000); // 起動から5秒後に強制的にUIを開放
-
-    initCameras();
+        document.getElementById('ai-status').innerText = "AIシステム稼働中";
+    }
 }
 
 function forceStart() {
     document.querySelectorAll('.loading-overlay').forEach(el => el.style.display = 'none');
     document.getElementById('record-btn').disabled = false;
-    document.getElementById('record-btn').innerText = "計測開始";
+    document.getElementById('record-btn').innerText = "計測開始 (強制)";
 }
 
 async function startStream(select, video) {
@@ -140,14 +156,12 @@ let isRecording = false;
 recordBtn.onclick = () => {
     isRecording = !isRecording;
     if (isRecording) {
-        log = []; recordBtn.innerText = "計測停止";
+        log = []; recordBtn.innerText = "停止";
         document.getElementById('dash').style.display = "none";
-        document.getElementById('dl-btn').style.display = "none";
         timer = setInterval(() => { log.push({ ...state, ts: log.length }); }, 1000);
     } else {
         clearInterval(timer);
         recordBtn.innerText = "計測開始";
-        document.getElementById('dl-btn').style.display = "inline-block";
         runAnalysis();
     }
 };
@@ -193,8 +207,13 @@ async function initCameras() {
     await startStream(selF, vf);
     if(vds.length > 1) { selH.selectedIndex = 1; setTimeout(() => startStream(selH, vh), 1500); }
     function loop() {
-        if(vf.readyState >= 2) faceMesh.send({image: vf}).catch(()=>{});
-        if(vh.readyState >= 2) hands.send({image: vh}).catch(()=>{});
+        // AIが準備できていない状態でsendしないようガードを強化
+        if(faceReady && vf.readyState >= 2) {
+            faceMesh.send({image: vf}).catch(()=>{});
+        }
+        if(handsReady && vh.readyState >= 2) {
+            hands.send({image: vh}).catch(()=>{});
+        }
         requestAnimationFrame(loop);
     }
     loop();
