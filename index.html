@@ -3,11 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TDS-DMA Web: 技能分析システム（読込エラー対策版）</title>
-    <!-- ライブラリの読み込み（読み込み完了を待つためにdeferを使用せず標準的に記述） -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <title>TDS-DMA Web: 技能分析システム（解析同期版）</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root { --main-red: #e74c3c; --bg-dark: #121212; --card-bg: #1e1e1e; }
@@ -19,32 +18,31 @@
         .video-wrapper { position: relative; width: 100%; aspect-ratio: 4/3; background: #000; border-radius: 8px; overflow: hidden; margin-top: 10px; }
         video, canvas { position: absolute; width: 100%; height: 100%; top: 0; left: 0; }
         .controls { position: fixed; bottom: 0; left: 0; width: 100%; background: rgba(0,0,0,0.9); padding: 20px; display: flex; justify-content: center; align-items: center; gap: 20px; border-top: 1px solid #444; z-index: 1000; }
-        button { padding: 12px 35px; font-size: 18px; font-weight: bold; cursor: pointer; border: none; border-radius: 50px; transition: 0.3s; }
+        button { padding: 12px 35px; font-size: 18px; font-weight: bold; cursor: pointer; border: none; border-radius: 50px; }
         #record-btn { background: var(--main-red); color: white; }
-        #record-btn:disabled { background: #555; cursor: not-allowed; }
         #dl-btn { background: #2ecc71; color: white; display: none; }
         .dashboard { width: 95%; max-width: 1000px; margin: 30px auto; background: var(--card-bg); padding: 25px; border-radius: 15px; display: none; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
-        .chart-container { background: white; padding: 20px; border-radius: 10px; height: 350px; position: relative; box-sizing: border-box; }
+        .chart-container { background: white; padding: 15px; border-radius: 10px; height: 320px; position: relative; }
         .summary-box { margin-top: 20px; background: #2c3e50; padding: 20px; border-radius: 10px; line-height: 1.8; }
         select { background: #333; color: white; padding: 8px; width: 100%; border-radius: 5px; margin-bottom: 5px; }
-        .loading-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100; border-radius: 12px; }
+        /* 各カメラの準備中表示 */
+        .loading-overlay { position: absolute; top: 55px; left: 15px; width: calc(100% - 30px); height: calc(100% - 70px); background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 100; border-radius: 8px; pointer-events: none; }
     </style>
 </head>
 <body>
 
 <header>
     <h1>TAKUMI Development System (TDS-DMA Web)</h1>
-    <div id="ai-status">ライブラリを読み込み中...</div>
+    <div id="ai-status">システム初期化中...</div>
 </header>
 
 <div class="setup-guide">
-    ⚠️ 65cmの距離を保ってください。手が認識されると CAM 2 に「赤い骨格」が表示されます。
+    ⚠️ 65cmの距離を保ってください。AIが認識を開始すると「準備中」の表示が消えます。
 </div>
 
 <div class="main-container">
     <div class="cam-box">
-        <div id="loader-f" class="loading-overlay">正面モデル準備中...</div>
+        <div id="loader-f" class="loading-overlay">正面モデル起動中...</div>
         <select id="sel-f"></select>
         <div class="video-wrapper">
             <video id="v-face" autoplay playsinline muted></video>
@@ -52,7 +50,7 @@
         </div>
     </div>
     <div class="cam-box">
-        <div id="loader-h" class="loading-overlay">手元モデル準備中...</div>
+        <div id="loader-h" class="loading-overlay">手元モデル起動中...</div>
         <select id="sel-h"></select>
         <div class="video-wrapper">
             <video id="v-hand" autoplay playsinline muted></video>
@@ -62,14 +60,14 @@
 </div>
 
 <div class="controls">
-    試行: <input type="number" id="trial" value="1" style="width:60px; padding:10px; border-radius:5px; text-align:center;">
-    <button id="record-btn" disabled>AI読込待ち...</button>
+    試行: <input type="number" id="trial" value="1" style="width:60px; padding:10px; text-align:center;">
+    <button id="record-btn">計測開始</button>
     <button id="dl-btn">CSV保存</button>
 </div>
 
 <div class="dashboard" id="dash">
     <h2 style="border-left:5px solid var(--main-red); padding-left:15px; color:white;">技能解析レポート</h2>
-    <div class="grid">
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
         <div class="chart-container"><canvas id="gazeChart"></canvas></div>
         <div class="chart-container"><canvas id="pathChart"></canvas></div>
     </div>
@@ -77,17 +75,16 @@
 </div>
 
 <script>
-// --- 初期化チェック ---
 let faceMesh, hands;
-let faceReady = false;
-let handsReady = false;
+let faceStarted = false, handsStarted = false;
 let log = [];
-let state = { gaze: "Center", rx:null, ry:null };
+let state = { gaze: "Center", rx: null, ry: null };
+let charts = {};
 
+// --- 1. AIの初期化 ---
 async function initAI() {
-    // FaceMeshとHandsがグローバルに定義されるのを待つ
-    if (typeof window.FaceMesh === 'undefined' || typeof window.Hands === 'undefined') {
-        setTimeout(initAI, 500); // 0.5秒後に再試行
+    if (typeof window.FaceMesh === 'undefined') {
+        setTimeout(initAI, 500);
         return;
     }
 
@@ -97,51 +94,46 @@ async function initAI() {
     faceMesh.setOptions({ refineLandmarks: true, minDetectionConfidence: 0.5 });
     hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.5 });
 
-    faceMesh.onResults(onFaceResults);
-    hands.onResults(onHandsResults);
+    faceMesh.onResults(res => {
+        // 最初の結果が来たらオーバーレイを消す
+        if(!faceStarted) { faceStarted = true; document.getElementById('loader-f').style.display = 'none'; }
+        
+        const canvas = document.getElementById('c-face');
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        if (res.multiFaceLandmarks?.length > 0) {
+            const n = res.multiFaceLandmarks[0][1];
+            state.gaze = (n.x < 0.47 || n.x > 0.53) ? "Off-Center" : "Center";
+            drawConnectors(ctx, res.multiFaceLandmarks[0], FACEMESH_TESSELATION, {color: '#C0C0C050', lineWidth: 1});
+        }
+    });
 
-    document.getElementById('ai-status').innerText = "AIモデルの準備が整いました。カメラを許可してください。";
+    hands.onResults(res => {
+        if(!handsStarted) { handsStarted = true; document.getElementById('loader-h').style.display = 'none'; }
+        
+        const canvas = document.getElementById('c-hand');
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        state.rx = state.ry = null;
+
+        if (res.multiHandLandmarks) {
+            res.multiHandLandmarks.forEach((lms, i) => {
+                const side = res.multiHandedness[i].label;
+                if(side === 'Right') { 
+                    state.rx = (lms[9].x*100).toFixed(1); 
+                    state.ry = ((1-lms[9].y)*100).toFixed(1); 
+                }
+                drawConnectors(ctx, lms, HAND_CONNECTIONS, {color: side==='Right'?'#FF0000':'#0000FF', lineWidth: 3});
+            });
+        }
+    });
+
+    document.getElementById('ai-status').innerText = "AIモデル準備完了。カメラを選択してください。";
     initCameras();
 }
 
-function onFaceResults(res) {
-    if(!faceReady) { faceReady = true; document.getElementById('loader-f').style.display = 'none'; checkAllReady(); }
-    const ctxF = document.getElementById('c-face').getContext('2d');
-    ctxF.clearRect(0,0,640, 480);
-    if (res.multiFaceLandmarks?.length > 0) {
-        const n = res.multiFaceLandmarks[0][1];
-        state.gaze = (n.x < 0.47 || n.x > 0.53) ? "Off-Center" : "Center";
-        drawConnectors(ctxF, res.multiFaceLandmarks[0], FACEMESH_TESSELATION, {color: '#C0C0C050', lineWidth: 1});
-    }
-}
-
-function onHandsResults(res) {
-    if(!handsReady) { handsReady = true; document.getElementById('loader-h').style.display = 'none'; checkAllReady(); }
-    const ctxH = document.getElementById('c-hand').getContext('2d');
-    ctxH.clearRect(0,0,640, 480);
-    state.rx = state.ry = null;
-    if (res.multiHandLandmarks) {
-        res.multiHandLandmarks.forEach((lms, i) => {
-            const side = res.multiHandedness[i].label;
-            if(side === 'Right') { 
-                state.rx = (lms[9].x*100).toFixed(1); 
-                state.ry = ((1-lms[9].y)*100).toFixed(1); 
-            }
-            drawConnectors(ctxH, lms, HAND_CONNECTIONS, {color: side==='Right'?'#FF0000':'#0000FF', lineWidth: 3});
-        });
-    }
-}
-
-function checkAllReady() {
-    if(faceReady && handsReady) {
-        const btn = document.getElementById('record-btn');
-        btn.disabled = false;
-        btn.innerText = "計測開始 (Start Analysis)";
-        document.getElementById('ai-status').innerText = "システム稼働中";
-    }
-}
-
-// --- カメラと録画の制御 ---
+// --- 2. カメラ制御 ---
 async function startStream(select, video) {
     if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
     try {
@@ -149,12 +141,11 @@ async function startStream(select, video) {
             video: { deviceId: select.value ? { exact: select.value } : undefined, width: 640, height: 480 }
         });
         video.srcObject = stream;
-    } catch (e) { alert("カメラが使えません。別のアプリで使われていないか確認してください。"); }
+    } catch (e) { console.error("Camera Error"); }
 }
 
 const recordBtn = document.getElementById('record-btn');
 let isRecording = false;
-let charts = {};
 
 recordBtn.onclick = () => {
     isRecording = !isRecording;
@@ -180,7 +171,7 @@ function runAnalysis() {
     charts.g = new Chart(document.getElementById('gazeChart'), {
         type: 'pie',
         data: { labels: ['注視', '逸脱'], datasets: [{ data: [centers, log.length-centers], backgroundColor: ['#2ecc71', '#e74c3c'] }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { title: { display: true, text: '視線集中度' } } }
+        options: { responsive: true, maintainAspectRatio: false }
     });
 
     if(charts.p) charts.p.destroy();
@@ -190,7 +181,7 @@ function runAnalysis() {
         options: { responsive: true, maintainAspectRatio: false, scales: { x: { min: 0, max: 100 }, y: { min: 0, max: 100 } } }
     });
 
-    document.getElementById('stat-summary').innerHTML = `総時間: ${log.length}秒 / 視線集中率: ${Math.round((centers/log.length)*100)}% / 右手有効データ: ${rData.length}回`;
+    document.getElementById('stat-summary').innerHTML = `結果: 集中率 ${Math.round((centers/log.length)*100)}% / 有効捕捉 ${rData.length}秒`;
 }
 
 document.getElementById('dl-btn').onclick = () => {
@@ -199,7 +190,7 @@ document.getElementById('dl-btn').onclick = () => {
     const blob = new Blob([csv], {type:'text/csv'});
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `SkillData_T${document.getElementById('trial').value}.csv`;
+    a.download = `SkillData_${document.getElementById('trial').value}.csv`;
     a.click();
 };
 
@@ -213,20 +204,20 @@ async function initCameras() {
         selH.add(new Option(d.label || `CAM ${i}`, d.deviceId));
     });
     
-    await startStream(selF, document.getElementById('v-face'));
-    if(vds.length > 1) { selH.selectedIndex = 1; setTimeout(() => startStream(selH, document.getElementById('v-hand')), 1500); }
+    const vf = document.getElementById('v-face');
+    const vh = document.getElementById('v-hand');
+
+    await startStream(selF, vf);
+    if(vds.length > 1) { selH.selectedIndex = 1; setTimeout(() => startStream(selH, vh), 1500); }
 
     function loop() {
-        const vf = document.getElementById('v-face');
-        const vh = document.getElementById('v-hand');
-        if(faceReady && vf.readyState >= 2) faceMesh.send({image: vf});
-        if(handsReady && vh.readyState >= 2) hands.send({image: vh});
+        if(vf.readyState >= 2) faceMesh.send({image: vf});
+        if(vh.readyState >= 2) hands.send({image: vh});
         requestAnimationFrame(loop);
     }
     loop();
 }
 
-// ページ読み込み完了後にAI初期化を開始
 window.onload = initAI;
 </script>
 </body>
