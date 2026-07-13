@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TDS-DMA Web: 技能分析システム（完全安定版）</title>
+    <title>TDS-DMA Web: 技能分析システム（レイアウト修正版）</title>
     <link rel="icon" href="data:,">
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
@@ -15,19 +15,24 @@
         :root { --main-red: #e74c3c; --bg-dark: #121212; --card-bg: #1e1e1e; }
         body { font-family: 'Segoe UI', sans-serif; background: var(--bg-dark); color: white; margin: 0; padding-bottom: 150px; }
         header { background: #000; padding: 15px; text-align: center; border-bottom: 3px solid var(--main-red); }
+        
         .main-container { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; padding: 20px; }
         .cam-box { background: var(--card-bg); border: 2px solid #333; border-radius: 12px; padding: 15px; width: 450px; text-align: center; position: relative; }
         .video-wrapper { position: relative; width: 100%; aspect-ratio: 4/3; background: #000; border-radius: 8px; overflow: hidden; margin-top: 10px; }
         video, canvas { position: absolute; width: 100%; height: 100%; top: 0; left: 0; object-fit: contain; }
-        .controls { position: fixed; bottom: 0; left: 0; width: 100%; background: rgba(0,0,0,0.9); padding: 20px; display: flex; justify-content: center; align-items: center; gap: 20px; border-top: 1px solid #444; z-index: 1000; }
+
+        .controls { position: fixed; bottom: 0; left: 0; width: 100%; background: rgba(0,0,0,0.95); padding: 20px; display: flex; justify-content: center; align-items: center; gap: 20px; border-top: 1px solid #444; z-index: 1000; }
         button { padding: 12px 35px; font-size: 18px; font-weight: bold; cursor: pointer; border: none; border-radius: 50px; transition: 0.3s; }
         #record-btn { background: var(--main-red); color: white; }
         #record-btn:disabled { background: #555; cursor: wait; }
         #dl-btn { background: #2ecc71; color: white; display: none; }
-        .dashboard { width: 95%; max-width: 1100px; margin: 30px auto; background: var(--card-bg); padding: 25px; border-radius: 15px; display: none; }
-        .chart-container { background: white; padding: 15px; border-radius: 10px; height: 350px; }
-        select { background: #333; color: white; padding: 8px; width: 100%; border-radius: 5px; margin-bottom: 5px; }
-        .status-tag { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); padding: 4px 10px; border-radius: 4px; font-size: 12px; color: #0f0; }
+
+        /* ダッシュボードのレイアウト修正 */
+        .dashboard { width: 95%; max-width: 1200px; margin: 30px auto; display: none; }
+        .grid-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 30px; }
+        .chart-box { background: #fff; padding: 20px; border-radius: 15px; height: 400px; position: relative; } /* 白背景にしてグラフを独立 */
+        
+        .status-tag { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); padding: 4px 10px; border-radius: 4px; font-size: 12px; color: #0f0; z-index: 10; }
     </style>
 </head>
 <body>
@@ -41,31 +46,25 @@
     <div class="cam-box">
         <div class="status-tag" id="face-info">Face: Offline</div>
         <select id="sel-f"></select>
-        <div class="video-wrapper">
-            <video id="v-face" autoplay playsinline muted></video>
-            <canvas id="c-face"></canvas>
-        </div>
+        <div class="video-wrapper"><video id="v-face" autoplay playsinline muted></video><canvas id="c-face"></canvas></div>
     </div>
     <div class="cam-box">
         <div class="status-tag" id="hand-info">Hands: Offline</div>
         <select id="sel-h"></select>
-        <div class="video-wrapper">
-            <video id="v-hand" autoplay playsinline muted></video>
-            <canvas id="c-hand"></canvas>
-        </div>
+        <div class="video-wrapper"><video id="v-hand" autoplay playsinline muted></video><canvas id="c-hand"></canvas></div>
     </div>
 </div>
 
 <div class="controls">
-    Trial ID: <input type="text" id="trial" value="T001" style="width:70px; padding:10px; text-align:center;">
+    Trial: <input type="text" id="trial" value="T001" style="width:70px; padding:10px; text-align:center; border-radius:5px;">
     <button id="record-btn" disabled>準備中...</button>
     <button id="dl-btn">CSV保存</button>
 </div>
 
 <div class="dashboard" id="dash">
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px;">
-        <div class="chart-container"><canvas id="gazeChart"></canvas></div>
-        <div class="chart-container"><canvas id="pathChart"></canvas></div>
+    <div class="grid-container">
+        <div class="chart-box"><canvas id="gazeChart"></canvas></div>
+        <div class="chart-box"><canvas id="pathChart"></canvas></div>
     </div>
 </div>
 
@@ -78,40 +77,16 @@ let charts = {};
 let timer;
 let seconds = 0;
 
-// AIエンジンを完全に分離して初期化
 async function initAI() {
-    try {
-        // 1. FaceMeshの初期化
-        faceMesh = new FaceMesh({
-            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
-        });
-        faceMesh.setOptions({ refineLandmarks: true, minDetectionConfidence: 0.5 });
-        faceMesh.onResults(res => {
-            faceActive = true;
-            onFaceResults(res);
-        });
+    faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
+    faceMesh.setOptions({ refineLandmarks: true, minDetectionConfidence: 0.5 });
+    faceMesh.onResults(res => { faceActive = true; onFaceResults(res); });
 
-        // 2. Handsの初期化
-        hands = new Hands({
-            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-        });
-        hands.setOptions({
-            maxNumHands: 2,
-            modelComplexity: 1,
-            minDetectionConfidence: 0.4,
-            minTrackingConfidence: 0.4
-        });
-        hands.onResults(res => {
-            handsActive = true;
-            onHandResults(res);
-        });
+    hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+    hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.4, minTrackingConfidence: 0.4 });
+    hands.onResults(res => { handsActive = true; onHandResults(res); });
 
-        document.getElementById('ai-status').innerText = "カメラ起動中...";
-        await initCameras();
-    } catch (e) {
-        console.error("Initialization Error: ", e);
-        document.getElementById('ai-status').innerText = "初期化失敗。再読み込みしてください。";
-    }
+    await initCameras();
 }
 
 function onFaceResults(res) {
@@ -134,20 +109,14 @@ function onHandResults(res) {
     if (canvas.width !== 640) { canvas.width = 640; canvas.height = 480; }
     ctx.clearRect(0, 0, 640, 480);
     state.lx = state.ly = state.rx = state.ry = null;
-
     if (res.multiHandLandmarks) {
         for (let i = 0; i < res.multiHandLandmarks.length; i++) {
             const lms = res.multiHandLandmarks[i];
             const label = res.multiHandedness[i].label;
             const x = (lms[9].x * 100).toFixed(1);
             const y = ((1 - lms[9].y) * 100).toFixed(1);
-
-            if (label === "Left") { state.lx = x; state.ly = y; } 
-            else { state.rx = x; state.ry = y; }
-
-            window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {
-                color: label === "Left" ? '#3498db' : '#e74c3c', lineWidth: 4
-            });
+            if (label === "Left") { state.lx = x; state.ly = y; } else { state.rx = x; state.ry = y; }
+            window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {color: label === "Left" ? '#3498db' : '#e74c3c', lineWidth: 4});
         }
         document.getElementById('hand-info').innerText = `Hands: ${res.multiHandLandmarks.length}`;
     }
@@ -159,7 +128,7 @@ function checkReady() {
     if(faceActive && handsActive && btn.disabled) {
         btn.disabled = false;
         btn.innerText = "計測開始";
-        document.getElementById('ai-status').innerText = "AIシステム稼働中";
+        document.getElementById('ai-status').innerText = "AI稼働中";
     }
 }
 
@@ -167,35 +136,24 @@ async function initCameras() {
     const vds = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
     const selF = document.getElementById('sel-f');
     const selH = document.getElementById('sel-h');
-    vds.forEach((d, i) => {
-        selF.add(new Option(d.label || `Cam ${i}`, d.deviceId));
-        selH.add(new Option(d.label || `Cam ${i}`, d.deviceId));
-    });
+    vds.forEach((d, i) => { selF.add(new Option(d.label || `Cam ${i}`, d.deviceId)); selH.add(new Option(d.label || `Cam ${i}`, d.deviceId)); });
     if (vds.length > 1) selH.selectedIndex = 1;
 
     const vf = document.getElementById('v-face');
     const vh = document.getElementById('v-hand');
-    async function stream(v, id) {
-        v.srcObject = await navigator.mediaDevices.getUserMedia({video: {deviceId: id ? {exact: id} : undefined, width: 640, height: 480}});
-    }
+    async function stream(v, id) { v.srcObject = await navigator.mediaDevices.getUserMedia({video: {deviceId: id ? {exact: id} : undefined, width: 640, height: 480}}); }
     await stream(vf, selF.value);
     await stream(vh, selH.value);
 
-    // ループ内でのエラー落ちを徹底防止
     async function loop() {
-        try {
-            if(vf.readyState >= 2) await faceMesh.send({image: vf});
-        } catch(e) {}
-        try {
-            if(vh.readyState >= 2) await hands.send({image: vh});
-        } catch(e) {}
+        try { if(vf.readyState >= 2) await faceMesh.send({image: vf}); } catch(e) {}
+        try { if(vh.readyState >= 2) await hands.send({image: vh}); } catch(e) {}
         requestAnimationFrame(loop);
     }
     loop();
 }
 
-// 記録・分析
-const recordBtn = document.getElementById('record-btn');
+recordBtn = document.getElementById('record-btn');
 recordBtn.onclick = () => {
     if (!timer) {
         log = []; seconds = 0;
@@ -203,7 +161,6 @@ recordBtn.onclick = () => {
         recordBtn.innerText = "停止";
         recordBtn.style.background = "#555";
         document.getElementById('dash').style.display = "none";
-        document.getElementById('dl-btn').style.display = "none";
     } else {
         clearInterval(timer);
         timer = null;
@@ -217,11 +174,17 @@ recordBtn.onclick = () => {
 function showCharts() {
     document.getElementById('dash').style.display = "block";
     const centers = log.filter(d => d.gaze === "Center").length;
+    
+    // グラフのオプション（共通：レスポンシブ維持）
+    const commonOpt = { responsive: true, maintainAspectRatio: false };
+
     if(charts.g) charts.g.destroy();
     charts.g = new Chart(document.getElementById('gazeChart'), {
         type: 'pie',
-        data: { labels: ['正面', '逸脱'], datasets: [{ data: [centers, log.length-centers], backgroundColor: ['#2ecc71', '#e74c3c'] }] }
+        data: { labels: ['正面', '逸脱'], datasets: [{ data: [centers, log.length-centers], backgroundColor: ['#2ecc71', '#e74c3c'] }] },
+        options: { ...commonOpt, plugins: { title: { display: true, text: '視線集中度' } } }
     });
+
     if(charts.p) charts.p.destroy();
     charts.p = new Chart(document.getElementById('pathChart'), {
         type: 'scatter',
@@ -231,7 +194,7 @@ function showCharts() {
                 { label: '右手', data: log.filter(d => d.rx).map(d => ({x: d.rx, y: d.ry})), backgroundColor: '#e74c3c' }
             ]
         },
-        options: { scales: { x: { min: 0, max: 100 }, y: { min: 0, max: 100 } } }
+        options: { ...commonOpt, scales: { x: { min: 0, max: 100, title:{display:true, text:'横%'} }, y: { min: 0, max: 100, title:{display:true, text:'縦%'} } }, plugins: { title: { display: true, text: '両手作業エリア' } } }
     });
 }
 
