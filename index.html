@@ -6,6 +6,7 @@
     <title>TDS-DMA Web: 技能分析システム（標準映像版）</title>
     <link rel="icon" href="data:,">
     
+    <!-- MediaPipe & Chart.js libraries -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
@@ -94,7 +95,9 @@ function onFaceResults(res) {
     const ctx = canvas.getContext('2d');
     if (canvas.width !== 640) { canvas.width = 640; canvas.height = 480; }
     ctx.clearRect(0, 0, 640, 480);
+    
     if (res.multiFaceLandmarks?.length > 0) {
+        faceActive = true; // ★追加：顔を認識したらアクティブにする
         const n = res.multiFaceLandmarks[0][1];
         state.gaze = (n.x < 0.44 || n.x > 0.56) ? "Off-Center" : "Center";
         document.getElementById('face-info').innerText = `Face: ${state.gaze}`;
@@ -110,24 +113,21 @@ function onHandResults(res) {
     ctx.clearRect(0, 0, 640, 480);
     state.lx = state.ly = state.rx = state.ry = null;
 
-    if (res.multiHandLandmarks) {
+    if (res.multiHandLandmarks && res.multiHandLandmarks.length > 0) {
+        handsActive = true; // ★追加：手を認識したらアクティブにする
         for (let i = 0; i < res.multiHandLandmarks.length; i++) {
             const lms = res.multiHandLandmarks[i];
-            const label = res.multiHandedness[i].label; // Left or Right (AI判定)
+            const label = res.multiHandedness[i].label; 
 
-            // ★映像が標準(反転なし)なら、x=0が左、x=1が右。
             const x = (lms[9].x * 100).toFixed(1); 
             const y = ((1 - lms[9].y) * 100).toFixed(1);
 
-            // 画面の左右位置とラベルを組み合わせて判定
-            // AIが判定した左右ラベルに従ってプロットします。
             if (label === "Left") { 
                 state.lx = x; state.ly = y; 
             } else { 
                 state.rx = x; state.ry = y; 
             }
 
-            // 描画：左手(AI判定)は青、右手(AI判定)は赤
             window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {
                 color: label === "Left" ? '#3498db' : '#e74c3c', 
                 lineWidth: 4
@@ -140,6 +140,7 @@ function onHandResults(res) {
 
 function checkReady() {
     const btn = document.getElementById('record-btn');
+    // 両方のAIが一度でも認識に成功していればボタンを有効化
     if(faceActive && handsActive && btn.disabled) {
         btn.disabled = false;
         btn.innerText = "計測開始";
@@ -148,24 +149,45 @@ function checkReady() {
 }
 
 async function initCameras() {
-    const vds = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
-    const selF = document.getElementById('sel-f');
-    const selH = document.getElementById('sel-h');
-    vds.forEach((d, i) => { selF.add(new Option(d.label || `Cam ${i}`, d.deviceId)); selH.add(new Option(d.label || `Cam ${i}`, d.deviceId)); });
-    if (vds.length > 1) selH.selectedIndex = 1;
+    try {
+        const vds = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+        const selF = document.getElementById('sel-f');
+        const selH = document.getElementById('sel-h');
+        
+        selF.innerHTML = ""; selH.innerHTML = "";
+        vds.forEach((d, i) => { 
+            selF.add(new Option(d.label || `Cam ${i}`, d.deviceId)); 
+            selH.add(new Option(d.label || `Cam ${i}`, d.deviceId)); 
+        });
+        
+        if (vds.length > 1) selH.selectedIndex = 1;
 
-    const vf = document.getElementById('v-face');
-    const vh = document.getElementById('v-hand');
-    async function stream(v, id) { v.srcObject = await navigator.mediaDevices.getUserMedia({video: {deviceId: id ? {exact: id} : undefined, width: 640, height: 480}}); }
-    await stream(vf, selF.value);
-    await stream(vh, selH.value);
+        const vf = document.getElementById('v-face');
+        const vh = document.getElementById('v-hand');
 
-    async function loop() {
-        try { if(vf.readyState >= 2) await faceMesh.send({image: vf}); } catch(e) {}
-        try { if(vh.readyState >= 2) await hands.send({image: vh}); } catch(e) {}
-        requestAnimationFrame(loop);
+        async function stream(v, id) { 
+            const constraints = { video: { deviceId: id ? {exact: id} : undefined, width: 640, height: 480 } };
+            v.srcObject = await navigator.mediaDevices.getUserMedia(constraints); 
+        }
+
+        await stream(vf, selF.value);
+        await stream(vh, selH.value);
+
+        async function loop() {
+            try { if(vf.readyState >= 2) await faceMesh.send({image: vf}); } catch(e) {}
+            try { if(vh.readyState >= 2) await hands.send({image: vh}); } catch(e) {}
+            requestAnimationFrame(loop);
+        }
+        loop();
+
+        // カメラ切り替え時のリロード処理
+        selF.onchange = () => stream(vf, selF.value);
+        selH.onchange = () => stream(vh, selH.value);
+
+    } catch (err) {
+        console.error("Camera Init Error:", err);
+        document.getElementById('ai-status').innerText = "カメラの起動に失敗しました";
     }
-    loop();
 }
 
 const recordBtn = document.getElementById('record-btn');
