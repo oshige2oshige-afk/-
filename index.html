@@ -3,10 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TDS-DMA Web: 高精度両手分析システム</title>
+    <title>TDS-DMA Web: 技能分析システム（エラー修正版）</title>
     <link rel="icon" href="data:,">
     
-    <!-- MediaPipe & Chart.js ライブラリ -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
@@ -34,12 +33,11 @@
 <body>
 
 <header>
-    <h1>TDS-DMA Web: Skill Analysis System</h1>
-    <div id="ai-status" style="font-size: 14px; color: #aaa;">AIエンジン起動中...</div>
+    <h1>TDS-DMA Web Analysis</h1>
+    <div id="ai-status">AIシステム起動中...</div>
 </header>
 
 <div class="main-container">
-    <!-- 正面カメラ -->
     <div class="cam-box">
         <div class="status-tag" id="face-info">Face: Offline</div>
         <select id="sel-f"></select>
@@ -48,7 +46,6 @@
             <canvas id="c-face"></canvas>
         </div>
     </div>
-    <!-- 手元カメラ -->
     <div class="cam-box">
         <div class="status-tag" id="hand-info">Hands: Offline</div>
         <select id="sel-h"></select>
@@ -62,7 +59,7 @@
 <div class="controls">
     Trial ID: <input type="text" id="trial" value="T001" style="width:70px; padding:10px; text-align:center;">
     <button id="record-btn" disabled>AIロード中...</button>
-    <button id="dl-btn">CSVデータを保存</button>
+    <button id="dl-btn">CSV保存</button>
 </div>
 
 <div class="dashboard" id="dash">
@@ -81,27 +78,32 @@ let charts = {};
 let timer;
 let seconds = 0;
 
-// --- AI初期化 ---
+// ★重要：パス混同を回避するためのスマート・ロケーター
+function smartLocate(file) {
+    // ファイル名に "hand" が含まれていればhandsのパス、それ以外はface_meshのパスを返す
+    if (file.includes("hand")) {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    } else {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+    }
+}
+
 async function initAI() {
     if (typeof window.FaceMesh === 'undefined' || typeof window.Hands === 'undefined') {
         setTimeout(initAI, 500); return;
     }
 
-    // FaceMesh設定
-    faceMesh = new window.FaceMesh({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
-    });
+    // FaceMesh初期化
+    faceMesh = new window.FaceMesh({ locateFile: smartLocate });
     faceMesh.setOptions({ refineLandmarks: true, minDetectionConfidence: 0.5 });
     faceMesh.onResults(onFaceResults);
 
-    // Hands設定 (両手認識を強化)
-    hands = new window.Hands({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-    });
+    // Hands初期化
+    hands = new window.Hands({ locateFile: smartLocate });
     hands.setOptions({
-        maxNumHands: 2,           // 2本まで検出
-        modelComplexity: 1,       // 精度重視
-        minDetectionConfidence: 0.4, // 検出感度を少し上げる
+        maxNumHands: 2,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.4,
         minTrackingConfidence: 0.4
     });
     hands.onResults(onHandResults);
@@ -109,57 +111,44 @@ async function initAI() {
     initCameras();
 }
 
-// --- 顔認識の結果処理 ---
 function onFaceResults(res) {
     faceReady = true;
     const canvas = document.getElementById('c-face');
     const ctx = canvas.getContext('2d');
     if (canvas.width !== 640) { canvas.width = 640; canvas.height = 480; }
     ctx.clearRect(0, 0, 640, 480);
-
     if (res.multiFaceLandmarks?.length > 0) {
-        const n = res.multiFaceLandmarks[0][1]; // 鼻先
+        const n = res.multiFaceLandmarks[0][1];
         state.gaze = (n.x < 0.44 || n.x > 0.56) ? "Off-Center" : "Center";
         document.getElementById('face-info').innerText = `Face: ${state.gaze}`;
-        
         window.drawConnectors(ctx, res.multiFaceLandmarks[0], window.FACEMESH_TESSELATION, {color: '#C0C0C070', lineWidth: 1});
-    } else {
-        document.getElementById('face-info').innerText = "Face: Not Detected";
     }
     checkReady();
 }
 
-// --- 手の認識の結果処理 ---
 function onHandResults(res) {
     handsReady = true;
     const canvas = document.getElementById('c-hand');
     const ctx = canvas.getContext('2d');
     if (canvas.width !== 640) { canvas.width = 640; canvas.height = 480; }
     ctx.clearRect(0, 0, 640, 480);
-
-    // 毎フレームリセット
     state.lx = state.ly = state.rx = state.ry = null;
 
-    if (res.multiHandLandmarks && res.multiHandLandmarks.length > 0) {
+    if (res.multiHandLandmarks) {
         for (let i = 0; i < res.multiHandLandmarks.length; i++) {
             const lms = res.multiHandLandmarks[i];
-            const label = res.multiHandedness[i].label; // Left or Right
-            
-            const x = (lms[9].x * 100).toFixed(1); // 中指付け根
+            const label = res.multiHandedness[i].label;
+            const x = (lms[9].x * 100).toFixed(1);
             const y = ((1 - lms[9].y) * 100).toFixed(1);
 
             if (label === "Left") { state.lx = x; state.ly = y; } 
             else { state.rx = x; state.ry = y; }
 
-            // 描画 (左手:青, 右手:赤)
             window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {
                 color: label === "Left" ? '#3498db' : '#e74c3c', lineWidth: 4
             });
-            window.drawLandmarks(ctx, lms, {color: '#ffffff', lineWidth: 1, radius: 2});
         }
         document.getElementById('hand-info').innerText = `Hands: ${res.multiHandLandmarks.length}`;
-    } else {
-        document.getElementById('hand-info').innerText = "Hands: Not Detected";
     }
     checkReady();
 }
@@ -173,48 +162,40 @@ function checkReady() {
     }
 }
 
-// --- カメラ管理 ---
 async function initCameras() {
     const devs = await navigator.mediaDevices.enumerateDevices();
     const vds = devs.filter(d => d.kind === 'videoinput');
     const selF = document.getElementById('sel-f');
     const selH = document.getElementById('sel-h');
-
     vds.forEach((d, i) => {
-        selF.add(new Option(d.label || `Camera ${i}`, d.deviceId));
-        selH.add(new Option(d.label || `Camera ${i}`, d.deviceId));
+        selF.add(new Option(d.label || `Cam ${i}`, d.deviceId));
+        selH.add(new Option(d.label || `Cam ${i}`, d.deviceId));
     });
     if (vds.length > 1) selH.selectedIndex = 1;
 
     const vf = document.getElementById('v-face');
     const vh = document.getElementById('v-hand');
-
     async function stream(v, id) {
         v.srcObject = await navigator.mediaDevices.getUserMedia({video: {deviceId: id ? {exact: id} : undefined, width: 640, height: 480}});
     }
-
     await stream(vf, selF.value);
     await stream(vh, selH.value);
-    
     selF.onchange = () => stream(vf, selF.value);
     selH.onchange = () => stream(vh, selH.value);
 
     function loop() {
-        if(vf.readyState >= 2) faceMesh.send({image: vf});
-        if(vh.readyState >= 2) hands.send({image: vh});
+        if(vf.readyState >= 2) faceMesh.send({image: vf}).catch(e => console.error(e));
+        if(vh.readyState >= 2) hands.send({image: vh}).catch(e => console.error(e));
         requestAnimationFrame(loop);
     }
     loop();
 }
 
-// --- 記録・分析 ---
 const recordBtn = document.getElementById('record-btn');
 recordBtn.onclick = () => {
     if (!timer) {
         log = []; seconds = 0;
-        timer = setInterval(() => {
-            log.push({ t: seconds++, ...state });
-        }, 1000); // ★1秒ごとにサンプリング
+        timer = setInterval(() => { log.push({ t: seconds++, ...state }); }, 1000);
         recordBtn.innerText = "停止";
         recordBtn.style.background = "#555";
         document.getElementById('dash').style.display = "none";
@@ -232,14 +213,12 @@ recordBtn.onclick = () => {
 function showCharts() {
     document.getElementById('dash').style.display = "block";
     const centers = log.filter(d => d.gaze === "Center").length;
-    
     if(charts.g) charts.g.destroy();
     charts.g = new Chart(document.getElementById('gazeChart'), {
         type: 'pie',
         data: { labels: ['正面', '逸脱'], datasets: [{ data: [centers, log.length-centers], backgroundColor: ['#2ecc71', '#e74c3c'] }] },
         options: { plugins: { title: { display: true, text: '視線集中度' } } }
     });
-
     if(charts.p) charts.p.destroy();
     charts.p = new Chart(document.getElementById('pathChart'), {
         type: 'scatter',
@@ -249,10 +228,7 @@ function showCharts() {
                 { label: '右手', data: log.filter(d => d.rx).map(d => ({x: d.rx, y: d.ry})), backgroundColor: '#e74c3c' }
             ]
         },
-        options: {
-            scales: { x: { min: 0, max: 100 }, y: { min: 0, max: 100 } },
-            plugins: { title: { display: true, text: '両手作業エリア' } }
-        }
+        options: { scales: { x: { min: 0, max: 100 }, y: { min: 0, max: 100 } } }
     });
 }
 
