@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TDS-DMA Web: 技能分析システム（レイアウト修正版）</title>
+    <title>TDS-DMA Web: 技能分析システム（座標補正版）</title>
     <link rel="icon" href="data:,">
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
@@ -15,11 +15,12 @@
         :root { --main-red: #e74c3c; --bg-dark: #121212; --card-bg: #1e1e1e; }
         body { font-family: 'Segoe UI', sans-serif; background: var(--bg-dark); color: white; margin: 0; padding-bottom: 150px; }
         header { background: #000; padding: 15px; text-align: center; border-bottom: 3px solid var(--main-red); }
-        
         .main-container { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; padding: 20px; }
         .cam-box { background: var(--card-bg); border: 2px solid #333; border-radius: 12px; padding: 15px; width: 450px; text-align: center; position: relative; }
         .video-wrapper { position: relative; width: 100%; aspect-ratio: 4/3; background: #000; border-radius: 8px; overflow: hidden; margin-top: 10px; }
-        video, canvas { position: absolute; width: 100%; height: 100%; top: 0; left: 0; object-fit: contain; }
+        /* ビデオを鏡のように反転させる（直感的な操作のため） */
+        video { transform: scaleX(-1); } 
+        canvas { position: absolute; width: 100%; height: 100%; top: 0; left: 0; object-fit: contain; transform: scaleX(-1); }
 
         .controls { position: fixed; bottom: 0; left: 0; width: 100%; background: rgba(0,0,0,0.95); padding: 20px; display: flex; justify-content: center; align-items: center; gap: 20px; border-top: 1px solid #444; z-index: 1000; }
         button { padding: 12px 35px; font-size: 18px; font-weight: bold; cursor: pointer; border: none; border-radius: 50px; transition: 0.3s; }
@@ -27,10 +28,9 @@
         #record-btn:disabled { background: #555; cursor: wait; }
         #dl-btn { background: #2ecc71; color: white; display: none; }
 
-        /* ダッシュボードのレイアウト修正 */
         .dashboard { width: 95%; max-width: 1200px; margin: 30px auto; display: none; }
-        .grid-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 30px; }
-        .chart-box { background: #fff; padding: 20px; border-radius: 15px; height: 400px; position: relative; } /* 白背景にしてグラフを独立 */
+        .grid-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 30px; }
+        .chart-box { background: #fff; padding: 20px; border-radius: 15px; height: 450px; position: relative; }
         
         .status-tag { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); padding: 4px 10px; border-radius: 4px; font-size: 12px; color: #0f0; z-index: 10; }
     </style>
@@ -56,7 +56,7 @@
 </div>
 
 <div class="controls">
-    Trial: <input type="text" id="trial" value="T001" style="width:70px; padding:10px; text-align:center; border-radius:5px;">
+    Trial: <input type="text" id="trial" value="T001" style="width:70px; padding:10px; text-align:center;">
     <button id="record-btn" disabled>準備中...</button>
     <button id="dl-btn">CSV保存</button>
 </div>
@@ -78,11 +78,11 @@ let timer;
 let seconds = 0;
 
 async function initAI() {
-    faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
+    faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
     faceMesh.setOptions({ refineLandmarks: true, minDetectionConfidence: 0.5 });
     faceMesh.onResults(res => { faceActive = true; onFaceResults(res); });
 
-    hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+    hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
     hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.4, minTrackingConfidence: 0.4 });
     hands.onResults(res => { handsActive = true; onHandResults(res); });
 
@@ -109,14 +109,27 @@ function onHandResults(res) {
     if (canvas.width !== 640) { canvas.width = 640; canvas.height = 480; }
     ctx.clearRect(0, 0, 640, 480);
     state.lx = state.ly = state.rx = state.ry = null;
+
     if (res.multiHandLandmarks) {
         for (let i = 0; i < res.multiHandLandmarks.length; i++) {
             const lms = res.multiHandLandmarks[i];
-            const label = res.multiHandedness[i].label;
-            const x = (lms[9].x * 100).toFixed(1);
+            const label = res.multiHandedness[i].label; // Left or Right
+
+            // ★座標補正：ビデオを反転させているので、グラフも見た目に合わせるために (1-x) を行う
+            const x = ((1 - lms[9].x) * 100).toFixed(1); 
             const y = ((1 - lms[9].y) * 100).toFixed(1);
-            if (label === "Left") { state.lx = x; state.ly = y; } else { state.rx = x; state.ry = y; }
-            window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {color: label === "Left" ? '#3498db' : '#e74c3c', lineWidth: 4});
+
+            // MediaPipeのLabelはカメラ反転時は逆になる事があるため、画面上の左右位置で再定義
+            if (parseFloat(x) < 50) { 
+                state.lx = x; state.ly = y; // 画面左側のデータ
+            } else { 
+                state.rx = x; state.ry = y; // 画面右側のデータ
+            }
+
+            window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {
+                color: parseFloat(x) < 50 ? '#3498db' : '#e74c3c', 
+                lineWidth: 4
+            });
         }
         document.getElementById('hand-info').innerText = `Hands: ${res.multiHandLandmarks.length}`;
     }
@@ -153,7 +166,7 @@ async function initCameras() {
     loop();
 }
 
-recordBtn = document.getElementById('record-btn');
+const recordBtn = document.getElementById('record-btn');
 recordBtn.onclick = () => {
     if (!timer) {
         log = []; seconds = 0;
@@ -161,6 +174,7 @@ recordBtn.onclick = () => {
         recordBtn.innerText = "停止";
         recordBtn.style.background = "#555";
         document.getElementById('dash').style.display = "none";
+        document.getElementById('dl-btn').style.display = "none";
     } else {
         clearInterval(timer);
         timer = null;
@@ -174,8 +188,6 @@ recordBtn.onclick = () => {
 function showCharts() {
     document.getElementById('dash').style.display = "block";
     const centers = log.filter(d => d.gaze === "Center").length;
-    
-    // グラフのオプション（共通：レスポンシブ維持）
     const commonOpt = { responsive: true, maintainAspectRatio: false };
 
     if(charts.g) charts.g.destroy();
@@ -190,16 +202,23 @@ function showCharts() {
         type: 'scatter',
         data: {
             datasets: [
-                { label: '左手', data: log.filter(d => d.lx).map(d => ({x: d.lx, y: d.ly})), backgroundColor: '#3498db' },
-                { label: '右手', data: log.filter(d => d.rx).map(d => ({x: d.rx, y: d.ry})), backgroundColor: '#e74c3c' }
+                { label: '画面左側の手', data: log.filter(d => d.lx).map(d => ({x: d.lx, y: d.ly})), backgroundColor: '#3498db' },
+                { label: '画面右側の手', data: log.filter(d => d.rx).map(d => ({x: d.rx, y: d.ry})), backgroundColor: '#e74c3c' }
             ]
         },
-        options: { ...commonOpt, scales: { x: { min: 0, max: 100, title:{display:true, text:'横%'} }, y: { min: 0, max: 100, title:{display:true, text:'縦%'} } }, plugins: { title: { display: true, text: '両手作業エリア' } } }
+        options: { 
+            ...commonOpt, 
+            scales: { 
+                x: { min: 0, max: 100, title:{display:true, text:'横位置 (左0→右100)'} }, 
+                y: { min: 0, max: 100, title:{display:true, text:'縦位置 (手前0→奥100)'} } 
+            }, 
+            plugins: { title: { display: true, text: '両手作業エリア（カメラ視点）' } } 
+        }
     });
 }
 
 document.getElementById('dl-btn').onclick = () => {
-    let csv = "Time(sec),Gaze,Left_X,Left_Y,Right_X,Right_Y\n";
+    let csv = "Time(sec),Gaze,LeftHand_X,LeftHand_Y,RightHand_X,RightHand_Y\n";
     log.forEach(d => csv += `${d.t},${d.gaze},${d.lx||''},${d.ly||''},${d.rx||''},${d.ry||''}\n`);
     const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csv], {type: 'text/csv'});
     const a = document.createElement('a');
