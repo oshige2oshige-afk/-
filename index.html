@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TDS-DMA Web: 技能分析システム（右手赤・左手青）</title>
+    <title>TDS-DMA Web: 技能分析システム（右手：画面右・赤）</title>
     <link rel="icon" href="data:,">
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
@@ -35,7 +35,7 @@
 <body>
 
 <header>
-    <h1>TDS-DMA Web Analysis</h1>
+    <h1>TDS-DMA Web Analysis (右手：赤・画面右)</h1>
     <div id="ai-status">AIライブラリをロード中...</div>
 </header>
 
@@ -74,7 +74,6 @@ let charts = {};
 let timer;
 let seconds = 0;
 
-// 初期設定
 async function initAI() {
     faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
     faceMesh.setOptions({ refineLandmarks: true, minDetectionConfidence: 0.5 });
@@ -88,7 +87,6 @@ async function initAI() {
     await initCameras();
 }
 
-// グラフの初期化
 function initEmptyCharts() {
     const commonOpt = { responsive: true, maintainAspectRatio: false, animation: { duration: 200 } };
     
@@ -102,8 +100,8 @@ function initEmptyCharts() {
         type: 'scatter',
         data: {
             datasets: [
-                { label: '左手', data: [], backgroundColor: '#3498db', pointRadius: 5 }, // 左手 = 青
-                { label: '右手', data: [], backgroundColor: '#e74c3c', pointRadius: 5 }  // 右手 = 赤
+                { label: '左手', data: [], backgroundColor: '#3498db', pointRadius: 5 }, // 左：青
+                { label: '右手', data: [], backgroundColor: '#e74c3c', pointRadius: 5 }  // 右：赤
             ]
         },
         options: { 
@@ -142,17 +140,21 @@ function onHandResults(res) {
     if (res.multiHandLandmarks) {
         handsActive = true;
         res.multiHandLandmarks.forEach((lms, i) => {
-            const label = res.multiHandedness[i].label; // "Left" or "Right"
+            const label = res.multiHandedness[i].label; 
             const x = (lms[9].x * 100).toFixed(1); 
             const y = ((1 - lms[9].y) * 100).toFixed(1);
 
-            // 右手判定(Right)なら赤、左手判定(Left)なら青
-            if (label === "Right") { 
-                state.rx = x; state.ry = y; 
-                window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {color: '#e74c3c', lineWidth: 4}); // 右手=赤
+            // 【重要：修正箇所】
+            // カメラが真上からの場合、MediaPipeの"Left"判定が画面右側（右手）になるため
+            // 判定を逆に割り当てて、画面右側の手を「右手＝赤」に固定します。
+            if (label === "Left") { 
+                // 画面右側の手
+                state.rx = x; state.ry = y; // 右手データへ
+                window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {color: '#e74c3c', lineWidth: 4}); // 右手＝赤
             } else { 
-                state.lx = x; state.ly = y; 
-                window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {color: '#3498db', lineWidth: 4}); // 左手=青
+                // 画面左側の手
+                state.lx = x; state.ly = y; // 左手データへ
+                window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {color: '#3498db', lineWidth: 4}); // 左手＝青
             }
         });
         document.getElementById('hand-info').innerText = `Hands: ${res.multiHandLandmarks.length}`;
