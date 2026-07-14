@@ -3,9 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TDS-DMA Web: 技能分析システム（配色・左右補正版）</title>
+    <title>TDS-DMA Web: 技能分析システム（修正版）</title>
     <link rel="icon" href="data:,">
     
+    <!-- MediaPipe ライブラリの読み込み -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
@@ -18,7 +19,8 @@
         .main-container { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; padding: 20px; }
         .cam-box { background: var(--card-bg); border: 2px solid #333; border-radius: 12px; padding: 15px; width: 450px; text-align: center; position: relative; }
         .video-wrapper { position: relative; width: 100%; aspect-ratio: 4/3; background: #000; border-radius: 8px; overflow: hidden; margin-top: 10px; }
-        video, canvas { position: absolute; width: 100%; height: 100%; top: 0; left: 0; object-fit: contain; }
+        video { display: none; } /* ビデオ本体は非表示にし、Canvasのみ表示 */
+        canvas { width: 100%; height: 100%; border-radius: 8px; background: #000; }
 
         .controls { position: fixed; bottom: 0; left: 0; width: 100%; background: rgba(0,0,0,0.95); padding: 20px; display: flex; justify-content: center; align-items: center; gap: 20px; border-top: 1px solid #444; z-index: 1000; }
         button { padding: 12px 35px; font-size: 18px; font-weight: bold; cursor: pointer; border: none; border-radius: 50px; transition: 0.3s; }
@@ -30,7 +32,8 @@
         .grid-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 30px; }
         .chart-box { background: #fff; padding: 20px; border-radius: 15px; height: 480px; position: relative; }
         
-        .status-tag { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); padding: 4px 10px; border-radius: 4px; font-size: 12px; color: #0f0; z-index: 10; }
+        .status-tag { position: absolute; top: 25px; right: 25px; background: rgba(0,0,0,0.7); padding: 4px 10px; border-radius: 4px; font-size: 14px; color: #0f0; z-index: 10; border: 1px solid #0f0; }
+        select { background: #333; color: white; border: 1px solid #555; padding: 5px; border-radius: 5px; width: 80%; margin-bottom: 10px; }
     </style>
 </head>
 <body>
@@ -44,12 +47,18 @@
     <div class="cam-box">
         <div class="status-tag" id="face-info">Face: Wait</div>
         <select id="sel-f"></select>
-        <div class="video-wrapper"><video id="v-face" autoplay playsinline muted></video><canvas id="c-face"></canvas></div>
+        <div class="video-wrapper">
+            <video id="v-face" autoplay playsinline muted></video>
+            <canvas id="c-face"></canvas>
+        </div>
     </div>
     <div class="cam-box">
         <div class="status-tag" id="hand-info">Hands: Wait</div>
         <select id="sel-h"></select>
-        <div class="video-wrapper"><video id="v-hand" autoplay playsinline muted></video><canvas id="c-hand"></canvas></div>
+        <div class="video-wrapper">
+            <video id="v-hand" autoplay playsinline muted></video>
+            <canvas id="c-hand"></canvas>
+        </div>
     </div>
 </div>
 
@@ -68,6 +77,7 @@
 </div>
 
 <script>
+// グローバル変数
 let faceMesh, hands;
 let faceActive = false, handsActive = false;
 let log = [];
@@ -76,30 +86,50 @@ let charts = {};
 let timer = null;
 let seconds = 0;
 
+// MediaPipeの描画用関数のエイリアス（読み込み失敗対策）
+const drawingUtils = window;
+
 async function initAI() {
     try {
+        // Face Mesh 設定
         faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
-        faceMesh.setOptions({ refineLandmarks: true, minDetectionConfidence: 0.5 });
+        faceMesh.setOptions({ refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
         faceMesh.onResults(onFaceResults);
 
+        // Hands 設定
         hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
-        hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.4, minTrackingConfidence: 0.4 });
+        hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
         hands.onResults(onHandResults);
+
         await initCameras();
-    } catch (e) { document.getElementById('ai-status').innerText = "エラー: " + e; }
+    } catch (e) { 
+        console.error(e);
+        document.getElementById('ai-status').innerText = "エラー: AIの初期化に失敗しました。"; 
+    }
 }
 
 function onFaceResults(res) {
     if (!faceActive) { faceActive = true; checkReady(); }
     const canvas = document.getElementById('c-face');
     const ctx = canvas.getContext('2d');
-    if (canvas.width !== 640) { canvas.width = 640; canvas.height = 480; }
-    ctx.clearRect(0, 0, 640, 480);
+    
+    ctx.save();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // 映像の描画（鏡表示）
+    ctx.scale(-1, 1);
+    ctx.translate(-canvas.width, 0);
+    ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
+    ctx.restore();
+
     if (res.multiFaceLandmarks?.length > 0) {
-        const n = res.multiFaceLandmarks[0][1];
+        const n = res.multiFaceLandmarks[0][1]; // 鼻先
+        // 鏡表示に合わせるため判定を反転
         state.gaze = (n.x < 0.44 || n.x > 0.56) ? "Off-Center" : "Center";
         document.getElementById('face-info').innerText = `Face: ${state.gaze}`;
-        window.drawConnectors(ctx, res.multiFaceLandmarks[0], window.FACEMESH_TESSELATION, {color: '#C0C0C070', lineWidth: 1});
+
+        // ランドマークの描画
+        drawingUtils.drawConnectors(ctx, res.multiFaceLandmarks[0], FACEMESH_TESSELATION, {color: '#C0C0C070', lineWidth: 1});
     }
 }
 
@@ -107,29 +137,35 @@ function onHandResults(res) {
     if (!handsActive) { handsActive = true; checkReady(); }
     const canvas = document.getElementById('c-hand');
     const ctx = canvas.getContext('2d');
-    if (canvas.width !== 640) { canvas.width = 640; canvas.height = 480; }
-    ctx.clearRect(0, 0, 640, 480);
+    
+    ctx.save();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // 映像の描画（鏡表示）
+    ctx.scale(-1, 1);
+    ctx.translate(-canvas.width, 0);
+    ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
+    ctx.restore();
+
     state.lx = state.ly = state.rx = state.ry = null;
 
-    if (res.multiHandLandmarks) {
+    if (res.multiHandLandmarks && res.multiHandedness) {
         for (let i = 0; i < res.multiHandLandmarks.length; i++) {
             const lms = res.multiHandLandmarks[i];
-            const label = res.multiHandedness[i].label; // "Left" or "Right" (解剖学的)
+            const label = res.multiHandedness[i].label; // "Left" or "Right"
 
-            // ★ グラフの左右を直感に合わせる補正
-            // 標準映像(反転なし)では、自分の右手を動かすと画面では左に映るため、(1-x)で反転させる
+            // 座標補正: 0-100スケール & 鏡像反転
             const x = ((1 - lms[9].x) * 100).toFixed(1); 
-            const y = ((1 - lms[9].y) * 100).toFixed(1);
+            const y = ((lms[9].y) * 100).toFixed(1);
 
-            // ラベルに従ってデータを格納
+            // ラベル判定（MediaPipeのラベルは鏡映像だと逆になることがあるため注意）
             if (label === "Right") {
                 state.rx = x; state.ry = y;
             } else {
                 state.lx = x; state.ly = y;
             }
 
-            // 描画（右手＝赤、左手＝青）
-            window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {
+            drawingUtils.drawConnectors(ctx, lms, HAND_CONNECTIONS, {
                 color: label === "Right" ? '#e74c3c' : '#3498db', lineWidth: 4
             });
         }
@@ -150,29 +186,61 @@ function checkReady() {
 function forceReady() { faceActive = true; handsActive = true; checkReady(); }
 
 async function initCameras() {
-    const vds = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
-    const selF = document.getElementById('sel-f');
-    const selH = document.getElementById('sel-h');
-    vds.forEach((d, i) => { selF.add(new Option(d.label || `Cam ${i}`, d.deviceId)); selH.add(new Option(d.label || `Cam ${i}`, d.deviceId)); });
-    if (vds.length > 1) selH.selectedIndex = 1;
-    const vf = document.getElementById('v-face');
-    const vh = document.getElementById('v-hand');
-    async function stream(v, id) { v.srcObject = await navigator.mediaDevices.getUserMedia({video: {deviceId: id ? {exact: id} : undefined, width: 640, height: 480}}); }
-    await stream(vf, selF.value);
-    await stream(vh, selH.value);
-    function loop() {
-        if(vf.readyState >= 2) faceMesh.send({image: vf}).catch(()=>{});
-        if(vh.readyState >= 2) hands.send({image: vh}).catch(()=>{});
-        requestAnimationFrame(loop);
+    try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const vds = devices.filter(d => d.kind === 'videoinput');
+        
+        const selF = document.getElementById('sel-f');
+        const selH = document.getElementById('sel-h');
+        
+        vds.forEach((d, i) => {
+            selF.add(new Option(d.label || `Camera ${i}`, d.deviceId));
+            selH.add(new Option(d.label || `Camera ${i}`, d.deviceId));
+        });
+
+        if (vds.length > 1) selH.selectedIndex = 1;
+
+        const vf = document.getElementById('v-face');
+        const vh = document.getElementById('v-hand');
+
+        async function startStream(videoEl, deviceId, canvasId) {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { deviceId: deviceId ? { exact: deviceId } : undefined, width: 640, height: 480 }
+            });
+            videoEl.srcObject = stream;
+            const canvas = document.getElementById(canvasId);
+            canvas.width = 640;
+            canvas.height = 480;
+        }
+
+        await startStream(vf, selF.value, 'c-face');
+        await startStream(vh, selH.value, 'c-hand');
+
+        // デバイス変更時のイベント
+        selF.onchange = () => startStream(vf, selF.value, 'c-face');
+        selH.onchange = () => startStream(vh, selH.value, 'c-hand');
+
+        function process() {
+            if(vf.readyState >= 2) faceMesh.send({image: vf});
+            if(vh.readyState >= 2) hands.send({image: vh});
+            requestAnimationFrame(process);
+        }
+        process();
+
+    } catch (err) {
+        console.error(err);
+        alert("カメラの起動に失敗しました。ブラウザの許可を確認してください。");
     }
-    loop();
 }
 
+// 録画制御
 const btn = document.getElementById('record-btn');
 btn.onclick = () => {
     if (!timer) {
         log = []; seconds = 0;
-        timer = setInterval(() => { log.push({ t: seconds++, ...state }); }, 1000);
+        timer = setInterval(() => { 
+            log.push({ t: seconds++, ...state }); 
+        }, 1000);
         btn.innerText = "停止";
         btn.style.background = "#555";
         document.getElementById('dash').style.display = "none";
@@ -190,12 +258,16 @@ btn.onclick = () => {
 function showCharts() {
     document.getElementById('dash').style.display = "block";
     const centers = log.filter(d => d.gaze === "Center").length;
+    const total = log.length || 1;
     const commonOpt = { responsive: true, maintainAspectRatio: false };
 
     if(charts.g) charts.g.destroy();
     charts.g = new Chart(document.getElementById('gazeChart'), {
         type: 'pie',
-        data: { labels: ['正面', '逸脱'], datasets: [{ data: [centers, log.length-centers], backgroundColor: ['#2ecc71', '#e74c3c'] }] },
+        data: { 
+            labels: ['正面視', '逸脱'], 
+            datasets: [{ data: [centers, total - centers], backgroundColor: ['#2ecc71', '#e74c3c'] }] 
+        },
         options: { ...commonOpt, plugins: { title: { display: true, text: '視線集中度' } } }
     });
 
@@ -204,30 +276,33 @@ function showCharts() {
         type: 'scatter',
         data: {
             datasets: [
-                { label: '左手 (Blue)', data: log.filter(d => d.lx).map(d => ({x: d.lx, y: d.ly})), backgroundColor: '#3498db' },
-                { label: '右手 (Red)', data: log.filter(d => d.rx).map(d => ({x: d.rx, y: d.ry})), backgroundColor: '#e74c3c' }
+                { label: '左手 (Blue)', data: log.filter(d => d.lx !== null).map(d => ({x: d.lx, y: d.ly})), backgroundColor: '#3498db' },
+                { label: '右手 (Red)', data: log.filter(d => d.rx !== null).map(d => ({x: d.rx, y: d.ry})), backgroundColor: '#e74c3c' }
             ]
         },
         options: { 
             ...commonOpt, 
             scales: { 
                 x: { min: 0, max: 100, title:{display:true, text:'左(0) ⇔ 右(100)'} }, 
-                y: { min: 0, max: 100, title:{display:true, text:'手前(0) ⇔ 奥(100)'} } 
+                y: { min: 0, max: 100, reverse: true, title:{display:true, text:'上(0) ⇔ 下(100)'} } 
             }, 
-            plugins: { title: { display: true, text: '作業エリア (リアルタイム配置)' } } 
+            plugins: { title: { display: true, text: '作業エリア内での手の位置' } } 
         }
     });
 }
 
 document.getElementById('dl-btn').onclick = () => {
     let csv = "Time(sec),Gaze,LeftHand_X,LeftHand_Y,RightHand_X,RightHand_Y\n";
-    log.forEach(d => csv += `${d.t},${d.gaze},${d.lx||''},${d.ly||''},${d.rx||''},${d.ry||''}\n`);
+    log.forEach(d => {
+        csv += `${d.t},${d.gaze},${d.lx||''},${d.ly||''},${d.rx||''},${d.ry||''}\n`;
+    });
     const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csv], {type: 'text/csv'});
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `${document.getElementById('trial').value}_Data.csv`;
+    a.download = `${document.getElementById('trial').value}_SkillData.csv`;
     a.click();
 };
+
 window.onload = initAI;
 </script>
 </body>
