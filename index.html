@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TDS-DMA Web: 技能分析システム（リアルタイム版）</title>
+    <title>TDS-DMA Web: 技能分析システム（反転版）</title>
     <link rel="icon" href="data:,">
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
@@ -35,7 +35,7 @@
 <body>
 
 <header>
-    <h1>TDS-DMA Web Analysis</h1>
+    <h1>TDS-DMA Web Analysis (左右反転設定)</h1>
     <div id="ai-status">AIライブラリをロード中...</div>
 </header>
 
@@ -84,11 +84,11 @@ async function initAI() {
     hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.4, minTrackingConfidence: 0.4 });
     hands.onResults(onHandResults);
 
-    initEmptyCharts(); // グラフの枠組みだけ先に作る
+    initEmptyCharts();
     await initCameras();
 }
 
-// グラフの初期化（空の状態）
+// グラフの初期化
 function initEmptyCharts() {
     const commonOpt = { responsive: true, maintainAspectRatio: false, animation: { duration: 200 } };
     
@@ -102,8 +102,9 @@ function initEmptyCharts() {
         type: 'scatter',
         data: {
             datasets: [
-                { label: '左手', data: [], backgroundColor: '#3498db', pointRadius: 5 },
-                { label: '右手', data: [], backgroundColor: '#e74c3c', pointRadius: 5 }
+                // 左手: 赤 (#e74c3c), 右手: 青 (#3498db) に変更
+                { label: '左手', data: [], backgroundColor: '#e74c3c', pointRadius: 5 },
+                { label: '右手', data: [], backgroundColor: '#3498db', pointRadius: 5 }
             ]
         },
         options: { 
@@ -138,14 +139,23 @@ function onHandResults(res) {
     if (canvas.width !== 640) { canvas.width = 640; canvas.height = 480; }
     ctx.clearRect(0, 0, 640, 480);
     state.lx = state.ly = state.rx = state.ry = null;
+    
     if (res.multiHandLandmarks) {
         handsActive = true;
         res.multiHandLandmarks.forEach((lms, i) => {
-            const label = res.multiHandedness[i].label;
+            const label = res.multiHandedness[i].label; // MediaPipeの判定
             const x = (lms[9].x * 100).toFixed(1); 
             const y = ((1 - lms[9].y) * 100).toFixed(1);
-            if (label === "Left") { state.lx = x; state.ly = y; } else { state.rx = x; state.ry = y; }
-            window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {color: label === "Left" ? '#3498db' : '#e74c3c', lineWidth: 4});
+
+            // 左右の判定を反転
+            // MediaPipeの "Left" (画面左側) をデータ上の "Right" (右手) として扱う
+            if (label === "Left") { 
+                state.rx = x; state.ry = y; // 右手データへ
+                window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {color: '#3498db', lineWidth: 4}); // 青色
+            } else { 
+                state.lx = x; state.ly = y; // 左手データへ
+                window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {color: '#e74c3c', lineWidth: 4}); // 赤色
+            }
         });
         document.getElementById('hand-info').innerText = `Hands: ${res.multiHandLandmarks.length}`;
     }
@@ -180,30 +190,25 @@ async function initCameras() {
     loop();
 }
 
-// 記録開始・停止ボタン
+// 記録開始・停止
 const recordBtn = document.getElementById('record-btn');
 recordBtn.onclick = () => {
     if (!timer) {
-        // 開始処理
         log = []; seconds = 0;
         charts.g.data.datasets[0].data = [0, 0];
         charts.p.data.datasets[0].data = [];
         charts.p.data.datasets[1].data = [];
         charts.g.update(); charts.p.update();
-        
         document.getElementById('dash').style.visibility = "visible";
         document.getElementById('dl-btn').style.display = "none";
-        
         timer = setInterval(() => {
             const dataPoint = { t: seconds++, ...state };
             log.push(dataPoint);
             updateChartsRealtime(dataPoint);
         }, 1000);
-
         recordBtn.innerText = "停止";
         recordBtn.style.background = "#555";
     } else {
-        // 停止処理
         clearInterval(timer);
         timer = null;
         recordBtn.innerText = "計測開始";
@@ -212,20 +217,13 @@ recordBtn.onclick = () => {
     }
 };
 
-// グラフのリアルタイム更新関数
 function updateChartsRealtime(newData) {
-    // 1. 視線グラフの更新
     const centers = log.filter(d => d.gaze === "Center").length;
     charts.g.data.datasets[0].data = [centers, log.length - centers];
-    charts.g.update('none'); // パフォーマンスのためアニメーション無効で更新
+    charts.g.update('none');
 
-    // 2. 座標グラフの更新
-    if (newData.lx !== null) {
-        charts.p.data.datasets[0].data.push({ x: newData.lx, y: newData.ly });
-    }
-    if (newData.rx !== null) {
-        charts.p.data.datasets[1].data.push({ x: newData.rx, y: newData.ry });
-    }
+    if (newData.lx !== null) charts.p.data.datasets[0].data.push({ x: newData.lx, y: newData.ly });
+    if (newData.rx !== null) charts.p.data.datasets[1].data.push({ x: newData.rx, y: newData.ry });
     charts.p.update('none');
 }
 
