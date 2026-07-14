@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TDS-DMA Web: 技能分析システム（反転版）</title>
+    <title>TDS-DMA Web: 技能分析システム（右手赤・左手青）</title>
     <link rel="icon" href="data:,">
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
@@ -12,7 +12,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
     <style>
-        :root { --main-red: #e74c3c; --bg-dark: #121212; --card-bg: #1e1e1e; }
+        :root { --main-red: #e74c3c; --main-blue: #3498db; --bg-dark: #121212; --card-bg: #1e1e1e; }
         body { font-family: 'Segoe UI', sans-serif; background: var(--bg-dark); color: white; margin: 0; padding-bottom: 150px; }
         header { background: #000; padding: 15px; text-align: center; border-bottom: 3px solid var(--main-red); }
         .main-container { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; padding: 20px; }
@@ -35,7 +35,7 @@
 <body>
 
 <header>
-    <h1>TDS-DMA Web Analysis (左右反転設定)</h1>
+    <h1>TDS-DMA Web Analysis</h1>
     <div id="ai-status">AIライブラリをロード中...</div>
 </header>
 
@@ -102,9 +102,8 @@ function initEmptyCharts() {
         type: 'scatter',
         data: {
             datasets: [
-                // 左手: 赤 (#e74c3c), 右手: 青 (#3498db) に変更
-                { label: '左手', data: [], backgroundColor: '#e74c3c', pointRadius: 5 },
-                { label: '右手', data: [], backgroundColor: '#3498db', pointRadius: 5 }
+                { label: '左手', data: [], backgroundColor: '#3498db', pointRadius: 5 }, // 左手 = 青
+                { label: '右手', data: [], backgroundColor: '#e74c3c', pointRadius: 5 }  // 右手 = 赤
             ]
         },
         options: { 
@@ -139,22 +138,21 @@ function onHandResults(res) {
     if (canvas.width !== 640) { canvas.width = 640; canvas.height = 480; }
     ctx.clearRect(0, 0, 640, 480);
     state.lx = state.ly = state.rx = state.ry = null;
-    
+
     if (res.multiHandLandmarks) {
         handsActive = true;
         res.multiHandLandmarks.forEach((lms, i) => {
-            const label = res.multiHandedness[i].label; // MediaPipeの判定
+            const label = res.multiHandedness[i].label; // "Left" or "Right"
             const x = (lms[9].x * 100).toFixed(1); 
             const y = ((1 - lms[9].y) * 100).toFixed(1);
 
-            // 左右の判定を反転
-            // MediaPipeの "Left" (画面左側) をデータ上の "Right" (右手) として扱う
-            if (label === "Left") { 
-                state.rx = x; state.ry = y; // 右手データへ
-                window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {color: '#3498db', lineWidth: 4}); // 青色
+            // 右手判定(Right)なら赤、左手判定(Left)なら青
+            if (label === "Right") { 
+                state.rx = x; state.ry = y; 
+                window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {color: '#e74c3c', lineWidth: 4}); // 右手=赤
             } else { 
-                state.lx = x; state.ly = y; // 左手データへ
-                window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {color: '#e74c3c', lineWidth: 4}); // 赤色
+                state.lx = x; state.ly = y; 
+                window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {color: '#3498db', lineWidth: 4}); // 左手=青
             }
         });
         document.getElementById('hand-info').innerText = `Hands: ${res.multiHandLandmarks.length}`;
@@ -190,7 +188,6 @@ async function initCameras() {
     loop();
 }
 
-// 記録開始・停止
 const recordBtn = document.getElementById('record-btn');
 recordBtn.onclick = () => {
     if (!timer) {
