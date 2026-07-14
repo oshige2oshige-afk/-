@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TDS-DMA Web: 技能分析システム（リアルタイム版）</title>
+    <title>TDS-DMA Web: 技能分析システム（配色・左右補正版）</title>
     <link rel="icon" href="data:,">
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
@@ -12,7 +12,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
     <style>
-        :root { --main-red: #e74c3c; --bg-dark: #121212; --card-bg: #1e1e1e; }
+        :root { --main-red: #e74c3c; --main-blue: #3498db; --bg-dark: #121212; --card-bg: #1e1e1e; }
         body { font-family: 'Segoe UI', sans-serif; background: var(--bg-dark); color: white; margin: 0; padding-bottom: 150px; }
         header { background: #000; padding: 15px; text-align: center; border-bottom: 3px solid var(--main-red); }
         .main-container { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; padding: 20px; }
@@ -23,12 +23,13 @@
         .controls { position: fixed; bottom: 0; left: 0; width: 100%; background: rgba(0,0,0,0.95); padding: 20px; display: flex; justify-content: center; align-items: center; gap: 20px; border-top: 1px solid #444; z-index: 1000; }
         button { padding: 12px 35px; font-size: 18px; font-weight: bold; cursor: pointer; border: none; border-radius: 50px; transition: 0.3s; }
         #record-btn { background: var(--main-red); color: white; }
-        #record-btn:disabled { background: #555; cursor: wait; }
+        #record-btn:disabled { background: #555; cursor: not-allowed; }
         #dl-btn { background: #2ecc71; color: white; display: none; }
 
-        .dashboard { width: 95%; max-width: 1200px; margin: 30px auto; display: block; visibility: hidden; }
+        .dashboard { width: 95%; max-width: 1200px; margin: 30px auto; display: none; }
         .grid-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 30px; }
-        .chart-box { background: #fff; padding: 20px; border-radius: 15px; height: 400px; position: relative; }
+        .chart-box { background: #fff; padding: 20px; border-radius: 15px; height: 480px; position: relative; }
+        
         .status-tag { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); padding: 4px 10px; border-radius: 4px; font-size: 12px; color: #0f0; z-index: 10; }
     </style>
 </head>
@@ -36,17 +37,17 @@
 
 <header>
     <h1>TDS-DMA Web Analysis</h1>
-    <div id="ai-status">AIライブラリをロード中...</div>
+    <div id="ai-status" style="color: #f1c40f;">AIライブラリをロード中...</div>
 </header>
 
 <div class="main-container">
     <div class="cam-box">
-        <div class="status-tag" id="face-info">Face: Offline</div>
+        <div class="status-tag" id="face-info">Face: Wait</div>
         <select id="sel-f"></select>
         <div class="video-wrapper"><video id="v-face" autoplay playsinline muted></video><canvas id="c-face"></canvas></div>
     </div>
     <div class="cam-box">
-        <div class="status-tag" id="hand-info">Hands: Offline</div>
+        <div class="status-tag" id="hand-info">Hands: Wait</div>
         <select id="sel-h"></select>
         <div class="video-wrapper"><video id="v-hand" autoplay playsinline muted></video><canvas id="c-hand"></canvas></div>
     </div>
@@ -54,8 +55,9 @@
 
 <div class="controls">
     Trial: <input type="text" id="trial" value="T001" style="width:70px; padding:10px; text-align:center;">
-    <button id="record-btn" disabled>準備中...</button>
+    <button id="record-btn" disabled>AI起動待機中...</button>
     <button id="dl-btn">CSV保存</button>
+    <button onclick="forceReady()" style="background:#444; font-size:12px; padding:5px 10px;">強制開始</button>
 </div>
 
 <div class="dashboard" id="dash">
@@ -71,95 +73,81 @@ let faceActive = false, handsActive = false;
 let log = [];
 let state = { gaze: "Center", lx: null, ly: null, rx: null, ry: null };
 let charts = {};
-let timer;
+let timer = null;
 let seconds = 0;
 
-// 初期設定
 async function initAI() {
-    faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
-    faceMesh.setOptions({ refineLandmarks: true, minDetectionConfidence: 0.5 });
-    faceMesh.onResults(onFaceResults);
+    try {
+        faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
+        faceMesh.setOptions({ refineLandmarks: true, minDetectionConfidence: 0.5 });
+        faceMesh.onResults(onFaceResults);
 
-    hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
-    hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.4, minTrackingConfidence: 0.4 });
-    hands.onResults(onHandResults);
-
-    initEmptyCharts(); // グラフの枠組みだけ先に作る
-    await initCameras();
-}
-
-// グラフの初期化（空の状態）
-function initEmptyCharts() {
-    const commonOpt = { responsive: true, maintainAspectRatio: false, animation: { duration: 200 } };
-    
-    charts.g = new Chart(document.getElementById('gazeChart'), {
-        type: 'pie',
-        data: { labels: ['正面', '逸脱'], datasets: [{ data: [0, 0], backgroundColor: ['#2ecc71', '#e74c3c'] }] },
-        options: { ...commonOpt, plugins: { title: { display: true, text: '視線集中度 (リアルタイム)' } } }
-    });
-
-    charts.p = new Chart(document.getElementById('pathChart'), {
-        type: 'scatter',
-        data: {
-            datasets: [
-                { label: '左手', data: [], backgroundColor: '#3498db', pointRadius: 5 },
-                { label: '右手', data: [], backgroundColor: '#e74c3c', pointRadius: 5 }
-            ]
-        },
-        options: { 
-            ...commonOpt, 
-            scales: { 
-                x: { min: 0, max: 100, title:{display:true, text:'左(0) ⇔ 右(100)'} }, 
-                y: { min: 0, max: 100, title:{display:true, text:'手前(0) ⇔ 奥(100)'} } 
-            }, 
-            plugins: { title: { display: true, text: '作業エリア (リアルタイム)' } } 
-        }
-    });
+        hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+        hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.4, minTrackingConfidence: 0.4 });
+        hands.onResults(onHandResults);
+        await initCameras();
+    } catch (e) { document.getElementById('ai-status').innerText = "エラー: " + e; }
 }
 
 function onFaceResults(res) {
+    if (!faceActive) { faceActive = true; checkReady(); }
     const canvas = document.getElementById('c-face');
     const ctx = canvas.getContext('2d');
     if (canvas.width !== 640) { canvas.width = 640; canvas.height = 480; }
     ctx.clearRect(0, 0, 640, 480);
     if (res.multiFaceLandmarks?.length > 0) {
-        faceActive = true;
         const n = res.multiFaceLandmarks[0][1];
         state.gaze = (n.x < 0.44 || n.x > 0.56) ? "Off-Center" : "Center";
         document.getElementById('face-info').innerText = `Face: ${state.gaze}`;
         window.drawConnectors(ctx, res.multiFaceLandmarks[0], window.FACEMESH_TESSELATION, {color: '#C0C0C070', lineWidth: 1});
     }
-    checkReady();
 }
 
 function onHandResults(res) {
+    if (!handsActive) { handsActive = true; checkReady(); }
     const canvas = document.getElementById('c-hand');
     const ctx = canvas.getContext('2d');
     if (canvas.width !== 640) { canvas.width = 640; canvas.height = 480; }
     ctx.clearRect(0, 0, 640, 480);
     state.lx = state.ly = state.rx = state.ry = null;
+
     if (res.multiHandLandmarks) {
-        handsActive = true;
-        res.multiHandLandmarks.forEach((lms, i) => {
-            const label = res.multiHandedness[i].label;
-            const x = (lms[9].x * 100).toFixed(1); 
+        for (let i = 0; i < res.multiHandLandmarks.length; i++) {
+            const lms = res.multiHandLandmarks[i];
+            const label = res.multiHandedness[i].label; // "Left" or "Right" (解剖学的)
+
+            // ★ グラフの左右を直感に合わせる補正
+            // 標準映像(反転なし)では、自分の右手を動かすと画面では左に映るため、(1-x)で反転させる
+            const x = ((1 - lms[9].x) * 100).toFixed(1); 
             const y = ((1 - lms[9].y) * 100).toFixed(1);
-            if (label === "Left") { state.lx = x; state.ly = y; } else { state.rx = x; state.ry = y; }
-            window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {color: label === "Left" ? '#3498db' : '#e74c3c', lineWidth: 4});
-        });
+
+            // ラベルに従ってデータを格納
+            if (label === "Right") {
+                state.rx = x; state.ry = y;
+            } else {
+                state.lx = x; state.ly = y;
+            }
+
+            // 描画（右手＝赤、左手＝青）
+            window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {
+                color: label === "Right" ? '#e74c3c' : '#3498db', lineWidth: 4
+            });
+        }
         document.getElementById('hand-info').innerText = `Hands: ${res.multiHandLandmarks.length}`;
     }
-    checkReady();
 }
 
 function checkReady() {
-    const btn = document.getElementById('record-btn');
-    if(faceActive && handsActive && btn.disabled) {
+    if(faceActive && handsActive) {
+        const btn = document.getElementById('record-btn');
         btn.disabled = false;
         btn.innerText = "計測開始";
-        document.getElementById('ai-status').innerText = "AI稼動中";
+        document.getElementById('ai-status').innerText = "AIシステム稼働中";
+        document.getElementById('ai-status').style.color = "#2ecc71";
     }
 }
+
+function forceReady() { faceActive = true; handsActive = true; checkReady(); }
 
 async function initCameras() {
     const vds = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
@@ -172,61 +160,63 @@ async function initCameras() {
     async function stream(v, id) { v.srcObject = await navigator.mediaDevices.getUserMedia({video: {deviceId: id ? {exact: id} : undefined, width: 640, height: 480}}); }
     await stream(vf, selF.value);
     await stream(vh, selH.value);
-    async function loop() {
-        try { if(vf.readyState >= 2) await faceMesh.send({image: vf}); } catch(e) {}
-        try { if(vh.readyState >= 2) await hands.send({image: vh}); } catch(e) {}
+    function loop() {
+        if(vf.readyState >= 2) faceMesh.send({image: vf}).catch(()=>{});
+        if(vh.readyState >= 2) hands.send({image: vh}).catch(()=>{});
         requestAnimationFrame(loop);
     }
     loop();
 }
 
-// 記録開始・停止ボタン
-const recordBtn = document.getElementById('record-btn');
-recordBtn.onclick = () => {
+const btn = document.getElementById('record-btn');
+btn.onclick = () => {
     if (!timer) {
-        // 開始処理
         log = []; seconds = 0;
-        charts.g.data.datasets[0].data = [0, 0];
-        charts.p.data.datasets[0].data = [];
-        charts.p.data.datasets[1].data = [];
-        charts.g.update(); charts.p.update();
-        
-        document.getElementById('dash').style.visibility = "visible";
+        timer = setInterval(() => { log.push({ t: seconds++, ...state }); }, 1000);
+        btn.innerText = "停止";
+        btn.style.background = "#555";
+        document.getElementById('dash').style.display = "none";
         document.getElementById('dl-btn').style.display = "none";
-        
-        timer = setInterval(() => {
-            const dataPoint = { t: seconds++, ...state };
-            log.push(dataPoint);
-            updateChartsRealtime(dataPoint);
-        }, 1000);
-
-        recordBtn.innerText = "停止";
-        recordBtn.style.background = "#555";
     } else {
-        // 停止処理
         clearInterval(timer);
         timer = null;
-        recordBtn.innerText = "計測開始";
-        recordBtn.style.background = "var(--main-red)";
+        btn.innerText = "計測開始";
+        btn.style.background = "var(--main-red)";
         document.getElementById('dl-btn').style.display = "inline-block";
+        showCharts();
     }
 };
 
-// グラフのリアルタイム更新関数
-function updateChartsRealtime(newData) {
-    // 1. 視線グラフの更新
+function showCharts() {
+    document.getElementById('dash').style.display = "block";
     const centers = log.filter(d => d.gaze === "Center").length;
-    charts.g.data.datasets[0].data = [centers, log.length - centers];
-    charts.g.update('none'); // パフォーマンスのためアニメーション無効で更新
+    const commonOpt = { responsive: true, maintainAspectRatio: false };
 
-    // 2. 座標グラフの更新
-    if (newData.lx !== null) {
-        charts.p.data.datasets[0].data.push({ x: newData.lx, y: newData.ly });
-    }
-    if (newData.rx !== null) {
-        charts.p.data.datasets[1].data.push({ x: newData.rx, y: newData.ry });
-    }
-    charts.p.update('none');
+    if(charts.g) charts.g.destroy();
+    charts.g = new Chart(document.getElementById('gazeChart'), {
+        type: 'pie',
+        data: { labels: ['正面', '逸脱'], datasets: [{ data: [centers, log.length-centers], backgroundColor: ['#2ecc71', '#e74c3c'] }] },
+        options: { ...commonOpt, plugins: { title: { display: true, text: '視線集中度' } } }
+    });
+
+    if(charts.p) charts.p.destroy();
+    charts.p = new Chart(document.getElementById('pathChart'), {
+        type: 'scatter',
+        data: {
+            datasets: [
+                { label: '左手 (Blue)', data: log.filter(d => d.lx).map(d => ({x: d.lx, y: d.ly})), backgroundColor: '#3498db' },
+                { label: '右手 (Red)', data: log.filter(d => d.rx).map(d => ({x: d.rx, y: d.ry})), backgroundColor: '#e74c3c' }
+            ]
+        },
+        options: { 
+            ...commonOpt, 
+            scales: { 
+                x: { min: 0, max: 100, title:{display:true, text:'左(0) ⇔ 右(100)'} }, 
+                y: { min: 0, max: 100, title:{display:true, text:'手前(0) ⇔ 奥(100)'} } 
+            }, 
+            plugins: { title: { display: true, text: '作業エリア (リアルタイム配置)' } } 
+        }
+    });
 }
 
 document.getElementById('dl-btn').onclick = () => {
@@ -238,7 +228,6 @@ document.getElementById('dl-btn').onclick = () => {
     a.download = `${document.getElementById('trial').value}_Data.csv`;
     a.click();
 };
-
 window.onload = initAI;
 </script>
 </body>
